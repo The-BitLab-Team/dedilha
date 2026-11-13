@@ -1,0 +1,116 @@
+name: Build
+
+# Testes em todo push/PR; executável do Windows em todo push/PR (como artefato);
+# Release com o .exe quando se cria uma tag v* (ex.: git tag v0.1.0 && git push --tags).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Testes (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Instalar
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install --no-deps basic-pitch   # o basic-pitch exige TensorFlow; usamos só o modelo ONNX dele
+      - name: Rodar os testes
+        run: python -m pytest
+
+  windows-exe:
+    name: Executável (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ferramentas de build
+        run: python -m pip install --upgrade pip build pyinstaller uv
+      - name: Montar o executável
+        run: python scripts/build_launcher.py
+      - name: Teste de fumaça — primeira execução baixa e instala tudo
+        shell: pwsh
+        env:
+          DEDILHA_HOME: ${{ runner.temp }}\dedilha-smoke
+        run: |
+          .\dist\Dedilha.exe --launcher-help
+          .\dist\Dedilha.exe --setup-only
+          if ($LASTEXITCODE -ne 0) { throw "a instalação falhou" }
+          .\dist\Dedilha.exe doctor
+          if ($LASTEXITCODE -ne 0) { throw "o doctor reportou problemas" }
+      - name: Teste de fumaça — analisar um acorde de dó maior
+        shell: pwsh
+        env:
+          DEDILHA_HOME: ${{ runner.temp }}\dedilha-smoke
+        run: |
+          python scripts/make_smoke_wav.py smoke.wav
+          .\dist\Dedilha.exe analyze smoke.wav --no-separation | Tee-Object -FilePath smoke.txt
+          if ($LASTEXITCODE -ne 0) { throw "a análise falhou" }
+          if (-not (Select-String -Path smoke.txt -Pattern '\bC\b' -Quiet)) { throw "não achei o acorde C" }
+      - name: Teste de fumaça — com separação de instrumentos (Demucs)
+        shell: pwsh
+        continue-on-error: true      # depende do HuggingFace e é lento; falhar aqui só gera aviso
+        env:
+          DEDILHA_HOME: ${{ runner.temp }}\dedilha-smoke
+        run: |
+          .\dist\Dedilha.exe analyze smoke.wav
+          if ($LASTEXITCODE -ne 0) { throw "a análise com separação falhou" }
+      - name: Renomear e gerar checksum
+        shell: pwsh
+        run: |
+          Move-Item dist\Dedilha.exe dist\Dedilha-Windows-x64.exe
+          $h = (Get-FileHash dist\Dedilha-Windows-x64.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  Dedilha-Windows-x64.exe" | Out-File -Encoding ascii dist\Dedilha-Windows-x64.exe.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Dedilha-Windows-x64
+          path: |
+            dist/Dedilha-Windows-x64.exe
+            dist/Dedilha-Windows-x64.exe.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publicar Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [tests, windows-exe]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Dedilha-Windows-x64
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Dedilha-Windows-x64.exe
+            dist/Dedilha-Windows-x64.exe.sha256
+          generate_release_notes: true
+          body: |
+            ## Como usar (Windows 64 bits)
+            1. Baixe **Dedilha-Windows-x64.exe** abaixo e dê dois cliques.
+            2. Na primeira vez ele baixa e instala tudo o que precisa (cerca de 500 MB, alguns minutos) e abre o programa no navegador.
+            3. O Windows pode avisar "O Windows protegeu seu computador" porque o executável não é assinado: clique em **Mais informações → Executar assim mesmo**.
+
+            Confira o download com o arquivo `.sha256`. Para desinstalar: `Dedilha-Windows-x64.exe --uninstall`.

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dedilha"
+version = "0.1.0"
+description = "Detecta acordes e notas musicais (violão, guitarra, piano, baixo e voz) e riffs repetidos a partir de links do YouTube/Spotify ou arquivos de áudio."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "librosa>=0.10",
+    "soundfile",
+    "scikit-learn",
+    "resampy",
+    "mir_eval",
+    "pretty_midi",
+    "typing_extensions",
+    "onnxruntime",            # roda o basic-pitch e o demucs sem TensorFlow/PyTorch
+    "demucs-onnx>=0.3",       # separação de instrumentos (htdemucs_6s: violão/guitarra + piano + voz)
+    "yt-dlp[default]",        # YouTube (inclui yt-dlp-ejs)
+    "imageio-ffmpeg",         # ffmpeg embutido, caso não exista um no PATH
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+]
+# ATENÇÃO: o pacote "basic-pitch" NÃO entra aqui de propósito. Ele declara uma dependência
+# em TensorFlow que não existe para Python >= 3.12 e quebra a instalação. O install.py instala
+# o basic-pitch com --no-deps (ele já traz o modelo ONNX dentro do pacote).
+
+[project.optional-dependencies]
+dev = ["pytest", "httpx"]
+
+[project.scripts]
+dedilha = "dedilha.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dedilha = ["web/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["slow: testes que rodam o modelo de transcrição (alguns segundos)"]
