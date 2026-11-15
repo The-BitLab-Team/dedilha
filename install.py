@@ -18,6 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 VENV = ROOT / ".venv"
+# Faixa de versão testada (o pacote é instalado com --no-deps; veja o texto acima).
+BASIC_PITCH_SPEC = "basic-pitch>=0.4,<0.5"
 
 
 def run(cmd: list[str], check: bool = True) -> int:
@@ -44,7 +46,7 @@ def main() -> None:
 
     run([py, "-m", "pip", "install", "--upgrade", "pip"])
     run([py, "-m", "pip", "install", "-e", ROOT])
-    run([py, "-m", "pip", "install", "--no-deps", "basic-pitch"])
+    run([py, "-m", "pip", "install", "--no-deps", BASIC_PITCH_SPEC])
 
     if "--no-model" not in sys.argv:
         print("\nBaixando o modelo de separação de instrumentos (~100 MB, só uma vez)…")
