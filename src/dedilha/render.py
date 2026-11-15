@@ -65,8 +65,9 @@ def _header(r: AnalysisResult) -> list[str]:
 
 
 def _section(inst: InstrumentResult, *, show_notes: bool) -> list[str]:
-    title = {"mix": "ACORDES DA MÚSICA", "guitar": "VIOLÃO / GUITARRA", "piano": "PIANO",
-             "bass": "BAIXO — FUNDAMENTAL DE CADA ACORDE E LINHA DE BAIXO", "voice": "VOZ — NOTAS CANTADAS"}.get(inst.key, inst.label.upper())
+    titles = {"mix": "ACORDES DA MÚSICA", "guitar": "VIOLÃO / GUITARRA", "piano": "PIANO",
+              "bass": "BAIXO — FUNDAMENTAL DE CADA ACORDE E LINHA DE BAIXO", "voice": "VOZ — NOTAS CANTADAS"}
+    title = titles.get(inst.key, inst.label.upper())
     out = ["", f"== {title} " + "=" * max(3, 60 - len(title))]
     if not inst.available:
         out.append(f"  (indisponível: {inst.reason})")

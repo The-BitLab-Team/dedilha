@@ -281,25 +281,31 @@ drop.addEventListener("drop", (e) => setFile(e.dataTransfer.files[0]));
 function setFile(f) { file = f || null; $("#fname").textContent = file ? file.name : "Arraste ou clique para escolher"; if (file) $("#url").value = ""; }
 $("#url").addEventListener("input", () => { if ($("#url").value) setFile(null); });
 function showError(msg) { const b = $("#error"); b.textContent = msg; b.classList.toggle("hidden", !msg); }
+async function readJson(r) { try { return await r.json(); } catch (e) { return {}; } }   // erro sem JSON (ex.: servidor fechado) não vira "Unexpected token"
+const MAX_UPLOAD = 300 * 1024 * 1024;
+// o endereço guarda a análise atual (#id): recarregar a página não perde o resultado
+function rememberJob(id) { try { history.replaceState(null, "", "#" + id); } catch (e) {} }
+function forgetJob() { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }
 
 $("#go").onclick = async () => {
   showError("");
   const url = $("#url").value.trim();
   if (!url && !file) return showError("Cole um link do YouTube/Spotify ou escolha um arquivo de áudio.");
+  if (file && file.size > MAX_UPLOAD) return showError("Arquivo grande demais (limite de 300 MB).");
   const inst = ["guitar", "piano", "bass", "voice", "riffs"].filter((k) => $("#i-" + k).checked);
   const fd = new FormData();
   if (file) fd.append("file", file); else fd.append("url", url);
   fd.append("instruments", inst.join(","));
   fd.append("separate", $("#separate").checked);
   fd.append("vocabulary", $("#vocab").value);
-  $("#go").disabled = true; $("#result").classList.add("hidden"); audio.pause();
+  $("#go").disabled = true; $("#result").classList.add("hidden"); audio.pause(); stopRiff(); forgetJob();
   $("#progress").classList.remove("hidden"); setProgress("input", 0.01, "Enviando…");
-  try {
-    const r = await fetch("/api/analyze", { method: "POST", body: fd });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.detail || "Falha ao iniciar a análise.");
-    jobId = j.job_id; poll();
-  } catch (e) { finish(); showError(e.message); }
+  let r;
+  try { r = await fetch("/api/analyze", { method: "POST", body: fd }); }
+  catch (e) { finish(); return showError("Não consegui falar com o programa. Ele ainda está aberto?"); }
+  const j = await readJson(r);
+  if (!r.ok || !j.job_id) { finish(); return showError(j.detail || "Falha ao iniciar a análise."); }
+  jobId = j.job_id; pollFails = 0; rememberJob(jobId); poll();
 };
 
 const STEPS = ["Áudio", "Separação", "Notas", "Pronto"];
@@ -314,15 +320,21 @@ function setProgress(stage, p, m) {
   $("#bar").style.width = Math.round(p * 100) + "%"; $("#msg").textContent = m; $("#pct").textContent = Math.round(p * 100) + "%";
 }
 function finish() { $("#go").disabled = false; $("#progress").classList.add("hidden"); clearTimeout(timer); }
+let pollFails = 0;
 function poll() {
   timer = setTimeout(async () => {
-    try {
-      const r = await fetch("/api/jobs/" + jobId); const j = await r.json();
-      if (!r.ok) throw new Error(j.detail);
-      if (j.status === "done") { finish(); show(j.result, j.has_audio); return; }
-      if (j.status === "error") { finish(); showError(j.error); return; }
-      setProgress(j.stage, j.progress, j.message); poll();
-    } catch (e) { finish(); showError(e.message); }
+    let r;
+    try { r = await fetch("/api/jobs/" + jobId); }
+    catch (e) {      // uma falha de rede passageira não joga fora uma análise de vários minutos
+      if (++pollFails > 8) { finish(); return showError("Perdi o contato com o programa. Se ele ainda estiver aberto, recarregue a página para retomar."); }
+      $("#msg").textContent = "Sem resposta do programa; tentando de novo…"; return poll();
+    }
+    pollFails = 0;
+    const j = await readJson(r);
+    if (!r.ok) { finish(); forgetJob(); return showError(j.detail || "A análise não está mais disponível."); }
+    if (j.status === "done") { finish(); return show(j.result, j.has_audio); }
+    if (j.status === "error") { finish(); forgetJob(); return showError(j.error || "A análise falhou."); }
+    setProgress(j.stage, j.progress, j.message); poll();
   }, 1000);
 }
 
@@ -512,7 +524,7 @@ setInterval(() => { if (!result) return; if (stopAt !== null && audio.currentTim
 
 function seek(t) { if (!hasAudio) return; stopAt = null; audio.currentTime = t; audio.play(); }
 function findIndex(list, t) { let lo = 0, hi = list.length - 1, ans = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (list[m].start <= t) { ans = m; lo = m + 1; } else hi = m - 1; } return ans; }
-let lastIdx = -2;
+let lastIdx = -2, lastNote = -2;
 function highlight(force) {
   if (!result) return;
   const t = hasAudio ? (audio.currentTime || 0) : 0;
@@ -530,7 +542,7 @@ function highlight(force) {
   }
   if (tab === "bass") {
     const j = findIndex(inst.notes, t), act = j >= 0 && t <= inst.notes[j].end ? j : -1;
-    document.querySelectorAll(".n").forEach((n) => n.classList.toggle("on", Number(n.dataset.i) === act));
+    if (act !== lastNote || force) { lastNote = act; document.querySelectorAll(".n").forEach((n) => n.classList.toggle("on", Number(n.dataset.i) === act)); }
   }
   const i = findIndex(inst.chords, t), ring = $("#ring");
   if (ring && i >= 0) { const c = inst.chords[i]; ring.style.setProperty("--p", Math.min(100, Math.max(0, (t - c.start) / Math.max(0.01, c.end - c.start) * 100)) + "%"); }
@@ -574,7 +586,19 @@ function asText() {
   return out.join("\n");
 }
 $("#copy").onclick = async () => { try { await navigator.clipboard.writeText(asText()); $("#copy").textContent = "Copiado!"; setTimeout(() => $("#copy").textContent = "Copiar texto", 1500); } catch (e) { showError("Não consegui copiar automaticamente."); } };
-$("#dl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: "application/json" })); a.download = "dedilha.json"; a.click(); URL.revokeObjectURL(a.href); };
+$("#dl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: "application/json" })); a.download = ((result.track.title || "dedilha").replace(/[^\p{L}\p{N} _.-]+/gu, "_").trim().slice(0, 80) || "dedilha") + ".json"; a.click(); URL.revokeObjectURL(a.href); };
+
+// ---- retomar ------------------------------------------------------------------------
+// Se a página foi recarregada (ou reaberta) com uma análise no endereço, mostra de novo o resultado ou o andamento.
+(async () => {
+  const m = /^#([0-9a-f]{32})$/.exec(location.hash); if (!m) return;
+  let r; try { r = await fetch("/api/jobs/" + m[1]); } catch (e) { return; }
+  if (!r.ok) return forgetJob();
+  const j = await readJson(r); jobId = m[1];
+  if (j.status === "done") show(j.result, j.has_audio);
+  else if (j.status === "error") forgetJob();
+  else { $("#go").disabled = true; $("#progress").classList.remove("hidden"); setProgress(j.stage, j.progress, j.message); poll(); }
+})();
 </script>
 </body>
 </html>

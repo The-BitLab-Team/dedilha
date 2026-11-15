@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from dedilha import sources
-from dedilha.sources import (InputError, SpotifyMeta, classify_source, download_youtube,
+from dedilha.sources import (InputError, SpotifyMeta, _friendly_download_error, classify_source, download_youtube,
+                             looks_like_link,
                               fetch_spotify_meta, parse_spotify_embed_html, parse_spotify_page_html,
                               score_candidate, search_youtube_for_track)
 
@@ -75,7 +75,8 @@ EMBED_HTML = """<html><head></head><body>
 {"type":"track","name":"Never Gonna Give You Up","duration":213573,
  "artists":[{"name":"Rick Astley","uri":"spotify:artist:0gxyHStUsqpMadRV0Di1Qt"}]}}}}}}</script></body></html>"""
 
-GRAPHQL_HTML = """<script type="application/json">{"a":[{"b":{"name":"Faixa X","artists":{"items":[{"profile":{"name":"Banda Y"}}]},"duration":{"totalMilliseconds":200000}}}]}</script>"""
+GRAPHQL_HTML = ("""<script type="application/json">{"a":[{"b":{"name":"Faixa X","artists":{"items":"""
+                """[{"profile":{"name":"Banda Y"}}]},"duration":{"totalMilliseconds":200000}}}]}</script>""")
 
 PAGE_HTML = """<html><head><title>Never Gonna Give You Up - song and lyrics by Rick Astley | Spotify</title>
 <meta property="og:title" content="Never Gonna Give You Up"/>
@@ -233,3 +234,62 @@ def test_download_errors_are_friendly(monkeypatch, tmp_path, raw, expected):
     _fake_ytdlp(monkeypatch, {}, fail=raw)
     with pytest.raises(InputError, match=expected):
         download_youtube("https://youtu.be/x", tmp_path, max_seconds=900)
+
+
+# ------------------------------------------------------------------ links sem "https://", ao vivo etc.
+
+@pytest.mark.parametrize("raw, kind, value", [
+    ("youtu.be/dQw4w9WgXcQ", "youtube", "https://youtu.be/dQw4w9WgXcQ"),
+    ("www.youtube.com/watch?v=dQw4w9WgXcQ", "youtube", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+    ("music.youtube.com/watch?v=abc", "youtube", "https://music.youtube.com/watch?v=abc"),
+    ("open.spotify.com/track/4aawyAB9vmqN3uQ7FjRGTy?si=1", "spotify", "https://open.spotify.com/track/4aawyAB9vmqN3uQ7FjRGTy"),
+])
+def test_links_pasted_without_scheme(raw, kind, value):
+    spec = classify_source(raw)
+    assert (spec.kind, spec.value) == (kind, value)
+
+
+def test_existing_file_wins_over_bare_link(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "youtu.be").mkdir()
+    (tmp_path / "youtu.be" / "faixa.mp3").write_bytes(b"x")
+    assert classify_source("youtu.be/faixa.mp3").kind == "file"
+
+
+def test_spotify_short_links_and_lookalike_hosts():
+    with pytest.raises(InputError, match="link completo"):
+        classify_source("https://spotify.link/AbCdEf")
+    with pytest.raises(InputError, match="link completo"):
+        classify_source("spotify.link/AbCdEf")
+    with pytest.raises(InputError, match="não é aceito"):          # termina com "spotify.com", mas é outro site
+        classify_source("https://evilspotify.com/track/4aawyAB9vmqN3uQ7FjRGTy")
+
+
+def test_looks_like_link():
+    for s in ("https://youtu.be/x", "HTTP://exemplo.com", "spotify:track:4aawyAB9vmqN3uQ7FjRGTy", "youtu.be/x",
+              " open.spotify.com/track/4aawyAB9vmqN3uQ7FjRGTy ", '"https://youtu.be/x"'):
+        assert looks_like_link(s), s
+    for s in ("C:\\Users\\eu\\musica.mp3", "/home/eu/musica.mp3", "musica.mp3", "~/musica.mp3", ""):
+        assert not looks_like_link(s), s
+
+
+@pytest.mark.parametrize("info", [
+    {"title": "Ao vivo", "is_live": True},
+    {"title": "Estreia", "live_status": "is_upcoming"},
+])
+def test_download_youtube_rejects_live_streams(monkeypatch, tmp_path, info):
+    state = _fake_ytdlp(monkeypatch, info)
+    with pytest.raises(InputError, match="ao vivo"):
+        download_youtube("https://youtu.be/x", tmp_path, max_seconds=900)
+    assert state["downloads"] == 0
+
+
+def test_download_youtube_without_info(monkeypatch, tmp_path):
+    _fake_ytdlp(monkeypatch, None)
+    with pytest.raises(InputError, match="nenhum vídeo"):
+        download_youtube("https://youtu.be/x", tmp_path, max_seconds=900)
+
+
+def test_friendly_error_with_empty_message():
+    assert "erro desconhecido" in _friendly_download_error("")
+    assert _friendly_download_error("ERROR: caiu.").count("..") == 0

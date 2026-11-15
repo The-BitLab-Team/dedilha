@@ -34,6 +34,20 @@ _SPOTIFY_TRACK_URL = re.compile(
 _SPOTIFY_TRACK_URI = re.compile(rf"^spotify:track:({_SPOTIFY_ID})$")
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
                   "youtu.be", "www.youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com"}
+# links colados sem o "https://" (comum ao copiar da barra de endereços ou de uma mensagem)
+_BARE_LINK = re.compile(
+    r"^(?:(?:www\.|m\.|music\.)?youtube\.com|(?:www\.)?youtu\.be|(?:www\.)?youtube-nocookie\.com"
+    r"|open\.spotify\.com|spotify\.link)/", re.I)
+
+
+def _host_is(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def looks_like_link(source: str) -> bool:
+    """É um link (e não um caminho de arquivo)? Usado pela interface web, que só aceita links no campo de texto."""
+    s = source.strip().strip('"').strip("'").strip()
+    return bool(re.match(r"^(?:https?://|spotify:)", s, re.I) or _BARE_LINK.match(s))
 
 
 @dataclass
@@ -54,10 +68,16 @@ def classify_source(source: str, allow_other_urls: bool = False) -> SourceSpec:
     if s.lower().startswith("spotify:"):
         raise InputError("Só aceito links de FAIXAS (track) do Spotify, não álbuns/playlists/artistas.")
 
+    if _BARE_LINK.match(s) and not os.path.exists(os.path.expanduser(s)):
+        s = "https://" + s
+
     if re.match(r"^https?://", s, re.I):
         parsed = urllib.parse.urlparse(s)
         host = (parsed.hostname or "").lower()
-        if host.endswith("spotify.com"):
+        if _host_is(host, "spotify.link"):
+            raise InputError("Links curtos do Spotify (spotify.link) não são aceitos. Abra a faixa no "
+                             "Spotify e copie o link completo (open.spotify.com/track/...).")
+        if _host_is(host, "spotify.com"):
             m = _SPOTIFY_TRACK_URL.search(s)
             if not m:
                 raise InputError("Só aceito links de FAIXAS (track) do Spotify, não álbuns, "
@@ -120,7 +140,8 @@ def _friendly_download_error(msg: str) -> str:
                 "(--cookies-from-browser chrome).")
     if "no supported javascript runtime" in low or "javascript runtime" in low:
         return "O yt-dlp precisa do Deno ou do Node.js instalado para baixar do YouTube." + hint
-    return "Falha ao baixar do YouTube: " + msg.splitlines()[-1][:300] + "." + hint
+    last = (msg.strip().splitlines() or ["erro desconhecido"])[-1][:300]
+    return "Falha ao baixar do YouTube: " + last.rstrip(".") + "." + hint
 
 
 def _channel_artist(info: dict[str, Any]) -> Optional[str]:
@@ -169,6 +190,11 @@ def download_youtube(url: str, workdir: Path, *, max_seconds: float,
             if not entries:
                 raise InputError("Não encontrei nenhum vídeo nesse link.")
             info = entries[0]
+        if not info:
+            raise InputError("Não encontrei nenhum vídeo nesse link.")
+        if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
+            raise InputError("Esse link é de uma transmissão ao vivo (ou que ainda não começou). "
+                             "Espere a transmissão terminar ou use o link de um vídeo já publicado.")
         duration = float(info.get("duration") or 0)
         if duration and duration > max_seconds:
             raise InputError(

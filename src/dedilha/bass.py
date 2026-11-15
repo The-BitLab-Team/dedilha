@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from bisect import bisect_left
 from typing import Iterable, Optional
 
 import numpy as np
@@ -36,12 +37,18 @@ def clean_bass_line(notes: Iterable[NoteEvent], flats: bool = False) -> list[Not
     """
     cand = [n for n in notes
             if BASS_MIN_MIDI <= n.midi <= BASS_MAX_MIDI and n.end - n.start >= MIN_NOTE_SECONDS]
+    cand.sort(key=lambda n: (n.start, n.midi))
+    starts = [n.start for n in cand]
+    longest = max((n.end - n.start for n in cand), default=0.0)
 
     keep: list[NoteEvent] = []
     for n in cand:
         dur = n.end - n.start
         ghost = False
-        for m in cand:
+        # só as notas que podem se sobrepor a esta (começam antes do fim dela e não muito antes do
+        # começo): evita comparar todas com todas, que fica lento em músicas longas
+        window = cand[bisect_left(starts, n.start - longest):bisect_left(starts, n.end)]
+        for m in window:
             if m is n or _overlap(n, m) < 0.6 * dur:
                 continue
             gap = n.midi - m.midi

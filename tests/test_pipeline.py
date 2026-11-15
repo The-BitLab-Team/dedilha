@@ -1,7 +1,5 @@
 import json
-from pathlib import Path
 
-import numpy as np
 import pytest
 import soundfile as sf
 from conftest import GroundTruthSeparator
@@ -149,3 +147,16 @@ def test_cli_end_to_end(tmp_path, wav, capsys):
     assert data["instruments"]["mix"]["chords"][0]["label"] == "C"
     assert cli_main(["analyze", str(tmp_path / "nada.mp3")]) == 2
     assert "Erro:" in capsys.readouterr().err
+
+
+def test_cli_json_to_stdout(wav, capsys):
+    assert cli_main(["analyze", str(wav), "--no-separation", "--json", "-"]) == 0
+    data = json.loads(capsys.readouterr().out)                    # a saída padrão é só o JSON
+    assert data["instruments"]["mix"]["chords"][0]["label"] == "C"
+
+
+def test_display_title_replaces_temp_file_name(tmp_path, wav, transcriber):
+    res = Analyzer(transcriber=transcriber).analyze(
+        str(wav), tmp_path, AnalysisOptions(separate=False, instruments=(), display_title="Minha Música.mp3"))
+    d = res.to_dict()["track"]
+    assert d["title"] == "Minha Música" and d["display_name"] == "Minha Música" and d["source"] == "Minha Música.mp3"
