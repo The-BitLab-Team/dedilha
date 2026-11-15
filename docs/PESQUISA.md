@@ -84,11 +84,13 @@ piores e plano de ajuste com gravações reais.
 
 O ambiente de desenvolvimento só alcançava o PyPI (YouTube, Spotify e HuggingFace bloqueados). Portanto:
 
-- Download real do YouTube e leitura real de links do Spotify: testados com respostas **simuladas**.
-- O `Dedilha.exe` e o instalador no **Windows**: validados em Linux (uv, Python, dependências e Deno reais);
-  no Windows só o workflow do GitHub os exercita.
-- Separação real com o Demucs: o pacote e a API foram inspecionados, mas o modelo não pôde ser baixado;
-  o fluxo foi testado com um separador falso que devolve os stems verdadeiros.
+- Download real do YouTube e leitura real de links do Spotify: testados só com respostas **simuladas**.
+- O `Dedilha.exe` e o instalador no **Windows**: exercitados pelo workflow do GitHub num Windows limpo
+  (12/11/2026: instalação do zero, `doctor` e análise de um acorde sintético passaram). Nunca foram abertos por
+  uma pessoa num Windows de uso comum (antivírus, SmartScreen, rede doméstica).
+- Separação real com o Demucs: no mesmo workflow o modelo foi baixado e separou um acorde sintético de 6 s.
+  Isso prova que o caminho funciona, não que a separação é boa: em música real a qualidade não foi medida.
+  Nos testes automáticos o fluxo usa um separador falso que devolve os stems verdadeiros.
 
 Primeiro passo no seu computador: `dedilha doctor`, depois um link do YouTube e um arquivo local.
 
@@ -149,6 +151,30 @@ um acorde sintético antes de publicar o executável.
 
 Riscos conhecidos: executável sem assinatura (SmartScreen), falsos positivos de antivírus em PyInstaller
 onefile e dependência de internet na primeira execução.
+
+### Revisão de código (15/11/2026)
+
+Correções feitas depois de uma leitura completa do código:
+
+- **Segurança da interface local.** O campo de link aceitava caminhos de arquivo; como a API devolve o áudio
+  analisado, qualquer página capaz de falar com `127.0.0.1` (ou qualquer aparelho da rede, com `--host`) podia
+  pedir a leitura de arquivos de mídia do computador. Agora o campo só aceita links, e o servidor confere `Host`
+  (contra *DNS rebinding*) e `Origin` (contra pedidos disparados por outros sites).
+- **Disco.** Cada análise deixava para sempre o WAV de entrada (até ~150 MB para 15 min), o upload e o MP3 do
+  player em `~/.cache/dedilha/jobs`. Agora fica só o MP3 enquanto o programa está aberto; pastas com mais de 3 h
+  são apagadas na abertura seguinte.
+- **Baixo lento.** A remoção de notas-fantasma comparava todas as notas com todas (8 000 notas: 12 s). Com uma
+  janela de tempo: 0,04 s, com resultado idêntico ao anterior em 40 casos aleatórios.
+- **Entradas.** Links colados sem `https://` são aceitos; transmissões ao vivo e links curtos `spotify.link`
+  recebem uma mensagem clara; domínios que só terminam em "spotify.com" não passam mais por Spotify.
+- **Interface.** Arquivos enviados aparecem com o próprio nome (antes: "upload"); recarregar a página retoma a
+  análise; uma falha de rede passageira não descarta mais uma análise em andamento.
+- **Manutenção.** `basic-pitch` com faixa de versão (`>=0.4,<0.5`), versão do pacote num lugar só, `ruff` no
+  workflow, actions do GitHub atualizadas (as antigas rodavam em Node.js 20, já descontinuado).
+
+Não mexi nos parâmetros de detecção (acordes, riffs, voz): sem gravações reais para medir, qualquer ajuste
+seria chute. Dois comportamentos conhecidos ficam como estão: uma nota sozinha é rotulada como acorde (ex.: lá
+puro vira "Am") e ruído sem música ainda recebe um acorde.
 
 ## 8. Próximos passos sugeridos
 
