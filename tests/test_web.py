@@ -20,11 +20,11 @@ def client(tmp_path, song_ctx, transcriber):
     return TestClient(app)
 
 
-def _wait(client, job_id, timeout=120):
+def _wait(client, job_id, timeout=120, done=("done", "error")):
     t0 = time.time()
     while time.time() - t0 < timeout:
         j = client.get(f"/api/jobs/{job_id}").json()
-        if j["status"] in ("done", "error"):
+        if j["status"] in done:
             return j
         time.sleep(0.5)
     raise TimeoutError
@@ -190,3 +190,68 @@ def test_small_helpers(tmp_path, monkeypatch):
     assert default_jobs_root() == tmp_path / "x"
     monkeypatch.delenv("DEDILHA_JOBS_DIR")
     assert default_jobs_root().name == "jobs"
+
+
+# ------------------------------------------------------------------ diagramas e cancelamento
+
+def test_voicings_endpoint(client):
+    r = client.get("/api/voicings")
+    assert r.status_code == 200
+    chords = r.json()["chords"]
+    assert len(chords) == 132 and chords["7:maj"]["guitar"]["text"] == "320003" and chords["7:maj"]["piano"] == [55, 59, 62]
+
+
+def test_capo_hint_reaches_the_api(tmp_path, transcriber):
+    from synth import make_song
+
+    song = make_song([(10, "maj"), (3, "maj"), (5, "maj"), (7, "min")], repeats=2, seed=5)
+    c = TestClient(create_app(jobs_root=tmp_path / "jobs", analyzer_factory=lambda: Analyzer(transcriber=transcriber)))
+    wav = tmp_path / "bb.wav"
+    sf.write(str(wav), song.mix(), song.sr)
+    with wav.open("rb") as fh:
+        r = c.post("/api/analyze", files={"file": ("bb.wav", fh, "audio/wav")}, data={"instruments": "", "separate": "false"})
+    job = _wait(c, r.json()["job_id"])
+    assert job["status"] == "done" and job["result"]["instruments"]["mix"]["capo"]["fret"] == 3
+
+
+class _SlowAnalyzer:
+    """Análise falsa que avisa do andamento várias vezes (para testar o cancelamento sem depender de tempo real)."""
+
+    def __init__(self):
+        self.started = 0
+
+    def analyze(self, source, workdir, options, progress):
+        self.started += 1
+        for i in range(400):
+            progress("separate", i / 400, "trabalhando…")
+            time.sleep(0.02)
+        raise AssertionError("a análise devia ter sido cancelada")
+
+
+def test_cancel_running_and_queued_jobs(tmp_path, song_ctx):
+    slow = _SlowAnalyzer()
+    c = TestClient(create_app(jobs_root=tmp_path / "jobs", analyzer_factory=lambda: slow))
+    wav = tmp_path / "m.wav"
+    sf.write(str(wav), song_ctx.mix(), song_ctx.sr)
+
+    def start():
+        with wav.open("rb") as fh:
+            return c.post("/api/analyze", files={"file": ("m.wav", fh, "audio/wav")}).json()["job_id"]
+
+    first, second = start(), start()
+    t0 = time.time()
+    while c.get(f"/api/jobs/{first}").json()["status"] != "running" and time.time() - t0 < 10:
+        time.sleep(0.05)
+    assert c.get(f"/api/jobs/{second}").json()["status"] == "queued"
+    # a que está na fila é cancelada na hora; a que está rodando, no próximo aviso de andamento
+    assert c.post(f"/api/jobs/{second}/cancel").json()["status"] == "cancelled"
+    assert c.post(f"/api/jobs/{first}/cancel").json()["cancel_requested"] is True
+    job = _wait(c, first, timeout=10, done=("done", "error", "cancelled"))
+    assert job["status"] == "cancelled" and job["message"] == "Análise cancelada."
+    assert _wait(c, second, timeout=10, done=("cancelled",))["status"] == "cancelled"
+    time.sleep(0.3)
+    assert slow.started == 1                                       # a da fila nem começou
+    for job_id in (first, second):                                 # e nada fica no disco
+        assert list((tmp_path / "jobs" / job_id).iterdir()) == []
+    assert c.post("/api/jobs/naoexiste/cancel").status_code == 404
+    assert c.post(f"/api/jobs/{first}/cancel").json()["status"] == "cancelled"     # cancelar de novo não muda nada

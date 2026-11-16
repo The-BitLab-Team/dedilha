@@ -21,6 +21,7 @@ from .sources import ResolvedInput, resolve_source
 from .transcribe import Transcriber, Transcription
 from .util import ProgressFn, Window, noop_progress, timed
 from .vocals import extract_vocal_notes
+from .voicings import suggest_capo
 
 LABELS = {"mix": "Música (mix)", "guitar": "Violão / Guitarra", "piano": "Piano", "bass": "Baixo",
           "voice": "Voz"}
@@ -74,6 +75,11 @@ def _beats(y: np.ndarray, sr: int) -> tuple[np.ndarray, Optional[float]]:
         return np.asarray(beats, dtype=float), (bpm if 40 <= bpm <= 240 else None)
     except Exception:
         return np.zeros(0), None
+
+
+def _capo(chords: list[ChordSegment]) -> Optional[dict]:
+    suggestion = suggest_capo(chords)
+    return suggestion.to_dict() if suggestion else None
 
 
 class Analyzer:
@@ -169,7 +175,8 @@ class Analyzer:
         if key:
             result.key, result.key_short = key.name(), key.short()
         relabel(a_mix.segments, flats)
-        result.instruments["mix"] = InstrumentResult("mix", LABELS["mix"], chords=a_mix.segments)
+        result.instruments["mix"] = InstrumentResult("mix", LABELS["mix"], chords=a_mix.segments,
+                                                     capo=_capo(a_mix.segments))
 
         # 5) violão/guitarra e piano (os riffs também precisam das notas desses stems) -----------
         riff_notes: dict[str, list[NoteEvent]] = {}
@@ -268,7 +275,8 @@ class Analyzer:
             t = self._transcriber.transcribe(_norm(y), flats=flats)
             a = detect_chords(t.posteriorgram, t.frame_times, duration, beat_times=beats,
                               vocabulary=opt.vocabulary, flats=flats, slash=opt.slash_chords)
-        return InstrumentResult(inst, label, chords=a.segments, notes=t.notes)
+        return InstrumentResult(inst, label, chords=a.segments, notes=t.notes,
+                                capo=_capo(a.segments) if inst == "guitar" else None)
 
     @staticmethod
     def _bass(y_work: np.ndarray, stems: Optional[dict[str, np.ndarray]],

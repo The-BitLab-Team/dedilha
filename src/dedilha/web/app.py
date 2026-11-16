@@ -24,6 +24,7 @@ from ..audio import AUDIO_EXTENSIONS
 from ..pipeline import ALL_PARTS, AnalysisOptions, Analyzer
 from ..sources import InputError, classify_source, looks_like_link
 from ..transcribe import DependencyError
+from ..voicings import all_voicings
 
 STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -32,11 +33,16 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _JOB_DIR_NAME = re.compile(r"^[0-9a-f]{32}$")
 
 
+class AnalysisCancelled(BaseException):
+    """O usuário cancelou a análise. Deriva de BaseException para atravessar os `except Exception` do caminho
+    (download, separação), que de outro modo transformariam o cancelamento num erro comum."""
+
+
 @dataclass
 class Job:
     id: str
     workdir: Path
-    status: str = "queued"           # queued | running | done | error
+    status: str = "queued"           # queued | running | done | error | cancelled
     stage: str = "queued"
     progress: float = 0.0
     message: str = "Na fila…"
@@ -44,6 +50,7 @@ class Job:
     error: Optional[str] = None
     created: float = field(default_factory=time.time)
     audio_path: Optional[Path] = None
+    cancel_requested: bool = False
 
 
 def _parse_instruments(value: str) -> tuple[str, ...]:
@@ -176,15 +183,23 @@ def create_app(jobs_root: Optional[Path] = None,
         now = time.time()
         with lock:
             old = [j for j in jobs.values() if now - j.created > JOB_TTL_SECONDS
-                   and j.status in ("done", "error")]
+                   and j.status in ("done", "error", "cancelled")]
             for j in old:
                 shutil.rmtree(j.workdir, ignore_errors=True)
                 jobs.pop(j.id, None)
 
     def run_job(job: Job, source: str, options: AnalysisOptions) -> None:
+        if job.cancel_requested:                     # cancelada ainda na fila
+            job.status, job.message = "cancelled", "Análise cancelada."
+            _trim_workdir(job.workdir, None)
+            return
         job.status = "running"
 
         def progress(stage: str, frac: float, msg: str) -> None:
+            # O cancelamento é cooperativo: vale na próxima vez que a análise avisa do andamento. Etapas
+            # longas que não avisam (a separação de instrumentos) terminam antes.
+            if job.cancel_requested:
+                raise AnalysisCancelled
             job.stage, job.progress, job.message = stage, float(frac), msg
 
         try:
@@ -194,12 +209,14 @@ def create_app(jobs_root: Optional[Path] = None,
             _trim_workdir(job.workdir, job.audio_path)
             job.result = result.to_dict()
             job.status, job.progress, job.message = "done", 1.0, "Pronto!"
+        except AnalysisCancelled:
+            job.status, job.message = "cancelled", "Análise cancelada."
         except (InputError, DependencyError) as exc:
             job.status, job.error = "error", str(exc)
         except Exception as exc:  # erro inesperado: não derruba o servidor
             traceback.print_exc()
             job.status, job.error = "error", f"Erro inesperado: {exc}"
-        if job.status == "error":
+        if job.status in ("error", "cancelled"):
             _trim_workdir(job.workdir, None)
 
     def work() -> None:                              # análise é pesada: uma por vez
@@ -298,6 +315,15 @@ def create_app(jobs_root: Optional[Path] = None,
             body["error"] = job.error
         return JSONResponse(body)
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    def job_cancel(job_id: str) -> JSONResponse:
+        job = _get(job_id)
+        if job.status in ("queued", "running"):
+            job.cancel_requested = True
+            if job.status == "queued":
+                job.status, job.message = "cancelled", "Análise cancelada."
+        return JSONResponse({"status": job.status, "cancel_requested": job.cancel_requested})
+
     @app.get("/api/jobs/{job_id}/audio")
     def job_audio(job_id: str) -> FileResponse:
         job = _get(job_id)
@@ -305,6 +331,15 @@ def create_app(jobs_root: Optional[Path] = None,
             raise HTTPException(404, "Áudio indisponível.")
         media = "audio/mpeg" if job.audio_path.suffix == ".mp3" else "audio/wav"
         return FileResponse(job.audio_path, media_type=media)
+
+    voicings_cache: dict[str, Any] = {}
+
+    @app.get("/api/voicings")
+    def voicings() -> JSONResponse:
+        """Posição de cada acorde no violão e no piano (tabela fixa; a página busca uma vez)."""
+        if not voicings_cache:
+            voicings_cache["chords"] = all_voicings()
+        return JSONResponse(voicings_cache, headers={"Cache-Control": "max-age=3600"})
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

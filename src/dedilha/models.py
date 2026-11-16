@@ -47,6 +47,7 @@ class InstrumentResult:
     notes: list[NoteEvent] = field(default_factory=list)
     range_low: Optional[str] = None         # voz e baixo: nota mais grave
     range_high: Optional[str] = None        # voz e baixo: nota mais aguda
+    capo: Optional[dict[str, Any]] = None   # mix e violão: sugestão de capotraste (voicings.CapoSuggestion)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,7 +55,7 @@ class InstrumentResult:
             "reason": self.reason,
             "chords": [c.to_dict() for c in self.chords],
             "notes": [n.to_dict() for n in self.notes],
-            "range_low": self.range_low, "range_high": self.range_high,
+            "range_low": self.range_low, "range_high": self.range_high, "capo": self.capo,
         }
 
 

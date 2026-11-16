@@ -152,6 +152,19 @@
   .occ small { opacity: .8; margin-left: 4px; }
   pre.tabpre { font: 13px/1.25 ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace; background: var(--chip); border-radius: 12px;
                padding: 10px 14px; overflow-x: auto; margin: 12px 0 0; }
+  /* diagramas de acordes */
+  .dia { display: flex; gap: 16px; align-items: center; min-height: 112px; }
+  .dc { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .dc .nm { font-weight: 800; font-size: 14px; line-height: 1.2; }
+  .dc .ft { font: 11px ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--muted); }
+  .dc svg { display: block; }
+  .lh { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 16px 0 4px; }
+  .lh .lbl { margin: 0; }
+  .legend { display: flex; gap: 10px; overflow-x: auto; padding: 4px 2px 12px; }
+  .legend .dc { border: 2px solid rgba(14,42,87,.18); border-radius: 14px; padding: 8px 8px 5px; flex: none; background: transparent; color: inherit; }
+  .legend .dc:hover { border-color: var(--teal); }
+  .pill.xs { height: 30px; padding: 0 12px; font-size: 11px; }
+  .capo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 2px; }
   .tools { display: flex; gap: 10px; margin-top: 22px; flex-wrap: wrap; }
   footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .hidden { display: none !important; }
@@ -202,7 +215,9 @@
       <div class="steps" id="steps"></div>
       <div class="pbar"><i id="bar"></i></div>
       <div class="pmsg"><span id="msg"></span><span id="pct"></span></div>
+      <button class="btn ghost sm up" id="cancel" style="margin-top: 12px">Cancelar</button>
     </div>
+    <div id="notice" class="info hidden"></div>
     <div id="error" class="info err hidden"></div>
   </section>
 
@@ -244,7 +259,9 @@ const fmt = (s) => { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) +
 const ICON_PLAY = '<svg width="20" height="20" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="#f8f0cf"/></svg>';
 const ICON_PAUSE = '<svg width="20" height="20" viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="#f8f0cf"/></svg>';   // ícones fixos (sem dados externos)
 
-let stopAt = null;
+let stopAt = null, loopFrom = null, loopOn = false;       // trecho tocando (riff): onde parar e, se repetindo, de onde recomeçar
+function clearExcerpt() { stopAt = null; loopFrom = null; }
+let VOIC = null, diaMode = "guitar", capo = 0;            // tabela de posições de acordes, diagrama da aba "mix", capotraste em uso
 let result = null, tab = "mix", jobId = null, timer = null, file = null, shift = 0, follow = true, hasAudio = false;
 const audio = $("#player");
 
@@ -252,16 +269,21 @@ const audio = $("#player");
 const SHARP = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"], FLAT = ["C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"];
 const PC = { C:0,"C#":1,Db:1,D:2,"D#":3,Eb:3,E:4,F:5,"F#":6,Gb:6,G:7,"G#":8,Ab:8,A:9,"A#":10,Bb:10,B:11 };
 function flatsFor(tonicPc, minor) { return (minor ? [2,7,0,5,10,3] : [5,10,3,8,1]).includes(tonicPc); }
-function keyInfo() {
+function keyInfo(sh = shift) {
   const k = result && result.key_short; if (!k) return null;
   const minor = k.endsWith("m"), tonic = PC[minor ? k.slice(0, -1) : k];
-  const t = (tonic + shift + 120) % 12; return { minor, tonic: t, flats: flatsFor(t, minor), name: (flatsFor(t, minor) ? FLAT : SHARP)[t] + (minor ? "m" : "") };
+  const t = (tonic + sh + 120) % 12; return { minor, tonic: t, flats: flatsFor(t, minor), name: (flatsFor(t, minor) ? FLAT : SHARP)[t] + (minor ? "m" : "") };
 }
-function useFlats() { const k = keyInfo(); return k ? k.flats : false; }
-function tChord(label) {
-  if (!shift) return label;
+function useFlats(sh = shift) { const k = keyInfo(sh); return k ? k.flats : false; }
+// Qual diagrama a aba mostra, e quanto os acordes dela estão deslocados. Com capotraste na casa N, o violão toca
+// as formas N semitons abaixo; piano, baixo e voz não mudam.
+function diagramKind(t = tab) { return t === "guitar" ? "guitar" : t === "piano" ? "piano" : t === "mix" ? diaMode : null; }
+function capoOn(t = tab) { return capo > 0 && diagramKind(t) === "guitar"; }
+function chordShift(t = tab) { return shift - (capoOn(t) ? capo : 0); }
+function tChord(label, sh = chordShift()) {
+  if (!sh) return label;
   const m = /^([A-G][#b]?)([^/]*)(?:\/([A-G][#b]?))?$/.exec(label); if (!m) return label;
-  const names = useFlats() ? FLAT : SHARP, mv = (n) => names[(PC[n] + shift + 120) % 12];
+  const names = useFlats(sh) ? FLAT : SHARP, mv = (n) => names[(PC[n] + sh + 120) % 12];
   return mv(m[1]) + m[2] + (m[3] ? "/" + mv(m[3]) : "");
 }
 function tNote(name) {
@@ -281,14 +303,20 @@ drop.addEventListener("drop", (e) => setFile(e.dataTransfer.files[0]));
 function setFile(f) { file = f || null; $("#fname").textContent = file ? file.name : "Arraste ou clique para escolher"; if (file) $("#url").value = ""; }
 $("#url").addEventListener("input", () => { if ($("#url").value) setFile(null); });
 function showError(msg) { const b = $("#error"); b.textContent = msg; b.classList.toggle("hidden", !msg); }
+function showNotice(msg) { const b = $("#notice"); b.textContent = msg; b.classList.toggle("hidden", !msg); }
 async function readJson(r) { try { return await r.json(); } catch (e) { return {}; } }   // erro sem JSON (ex.: servidor fechado) não vira "Unexpected token"
 const MAX_UPLOAD = 300 * 1024 * 1024;
 // o endereço guarda a análise atual (#id): recarregar a página não perde o resultado
 function rememberJob(id) { try { history.replaceState(null, "", "#" + id); } catch (e) {} }
 function forgetJob() { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }
 
+$("#cancel").onclick = async () => {
+  const id = jobId; finish(); forgetJob();
+  try { await fetch("/api/jobs/" + id + "/cancel", { method: "POST" }); } catch (e) {}
+  showNotice("Análise cancelada. Se ela já estava no meio de uma etapa longa (como a separação de instrumentos), o programa termina essa etapa antes de começar a próxima análise.");
+};
 $("#go").onclick = async () => {
-  showError("");
+  showError(""); showNotice("");
   const url = $("#url").value.trim();
   if (!url && !file) return showError("Cole um link do YouTube/Spotify ou escolha um arquivo de áudio.");
   if (file && file.size > MAX_UPLOAD) return showError("Arquivo grande demais (limite de 300 MB).");
@@ -334,6 +362,7 @@ function poll() {
     if (!r.ok) { finish(); forgetJob(); return showError(j.detail || "A análise não está mais disponível."); }
     if (j.status === "done") { finish(); return show(j.result, j.has_audio); }
     if (j.status === "error") { finish(); forgetJob(); return showError(j.error || "A análise falhou."); }
+    if (j.status === "cancelled") { finish(); forgetJob(); return showNotice("Análise cancelada."); }
     setProgress(j.stage, j.progress, j.message); poll();
   }, 1000);
 }
@@ -341,7 +370,7 @@ function poll() {
 // ---- resultado ----------------------------------------------------------------------
 const order = ["mix", "guitar", "piano", "bass", "voice"];
 function show(res, audioOk) {
-  result = res; tab = "mix"; shift = 0; hasAudio = audioOk; lastIdx = -2;
+  result = res; tab = "mix"; shift = 0; capo = 0; diaMode = "guitar"; hasAudio = audioOk; lastIdx = -2;
   $("#title").textContent = res.track.display_name;
   renderMeta();
   const w = $("#warnings"); w.replaceChildren();
@@ -361,7 +390,7 @@ function show(res, audioOk) {
     b.onclick = () => { tab = "riffs"; lastIdx = -2; render(); };
     tabs.append(b);
   }
-  stopRiff(); stopAt = null;
+  stopRiff(); clearExcerpt();
   $("#result").classList.remove("hidden"); render(); $("#result").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 function renderMeta() {
@@ -389,11 +418,13 @@ function render() {
     const ring = el("div", "ring"); ring.id = "ring"; const core = el("div", "core", "—"); core.id = "cur"; ring.append(core);
     const nx = el("div", "next"); nx.append(el("span", "lbl up", "Próximo")); const nv = el("div", "nxt", "—"); nv.id = "nxt"; nx.append(nv);
     bar.append(ring, nx);
+    if (diagramKind()) { const d = el("div", "dia"); d.id = "dia"; bar.append(d); }
   }
   bar.append(makeTranspose());
   c.append(bar);
   if (tab === "voice") renderNotes(inst, c, "Extensão vocal");
   else {
+    if (diagramKind()) renderHowToPlay(inst, c);
     if (!inst.chords.length) c.append(el("p", "hint", tab === "bass" ? "Nenhuma nota de baixo detectada." : "Nenhum acorde detectado."));
     const grid = el("div", "grid");
     inst.chords.forEach((ch, i) => {
@@ -407,7 +438,7 @@ function render() {
   }
   highlight(true);
 }
-function setShift(n) { shift = Math.max(-11, Math.min(11, n)); lastIdx = -2; renderMeta(); render(); }
+function setShift(n) { shift = Math.max(-11, Math.min(11, n)); capo = 0; lastIdx = -2; renderMeta(); render(); }   // a dica de capotraste vale para o tom original
 function renderNotes(inst, c, rangeLabel, heading) {
   if (heading) c.append(el("div", "lbl up sec", heading));
   if (inst.range_low) { const r = el("div", "range"); r.append(el("span", "lbl up", rangeLabel), el("span", "tag fill", tNote(inst.range_low)), "–", el("span", "tag fill", tNote(inst.range_high)), el("span", "hint", inst.notes.length + " notas")); c.append(r); }
@@ -420,9 +451,89 @@ function renderNotes(inst, c, rangeLabel, heading) {
   });
 }
 
-// ---- riffs --------------------------------------------------------------------------
 const NS = "http://www.w3.org/2000/svg";
 function svgEl(tag, attrs) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+// ---- diagramas de acordes -----------------------------------------------------------
+const NAVY = "#0e2a57", ORANGE = "#f27a21", TEAL = "#1d7f9c", CREAM = "#fcf7e2";
+fetch("/api/voicings").then((r) => r.json()).then((j) => { VOIC = j.chords || null; if (result) { lastIdx = -2; render(); } }).catch(() => {});
+function voicing(ch, sh) {     // posição do acorde `ch` deslocado `sh` semitons
+  if (!VOIC || ch.root == null) return null;
+  return VOIC[((((ch.root + sh) % 12) + 12) % 12) + ":" + ch.quality] || null;
+}
+function guitarBox(shape) {
+  const frets = shape.frets, fretted = frets.filter((f) => f > 0), maxF = fretted.length ? Math.max(...fretted) : 0;
+  const start = maxF <= 4 ? 1 : Math.min(...fretted), rows = Math.max(4, maxF - start + 1), rowH = 17, x0 = 13, gap = 13, y0 = 22;
+  const W = x0 + 5 * gap + 26, H = y0 + rows * rowH + 6, sx = (i) => x0 + i * gap;
+  const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img" });
+  svg.append(svgEl("title", {})); svg.firstChild.textContent = "Violão, da 6ª para a 1ª corda: " + shape.text;
+  for (let j = 0; j <= rows; j++) svg.append(svgEl("line", { x1: x0, x2: sx(5), y1: y0 + j * rowH, y2: y0 + j * rowH, stroke: NAVY, "stroke-width": j === 0 && start === 1 ? 4 : 1.2, "stroke-opacity": j === 0 && start === 1 ? 1 : 0.55 }));
+  for (let i = 0; i < 6; i++) svg.append(svgEl("line", { x1: sx(i), x2: sx(i), y1: y0, y2: y0 + rows * rowH, stroke: NAVY, "stroke-width": 1.2, "stroke-opacity": 0.55 }));
+  if (start > 1) { const t = svgEl("text", { x: sx(5) + 7, y: y0 + rowH / 2 + 4, "font-size": 10, "font-weight": 700, fill: NAVY }); t.textContent = start + "ª"; svg.append(t); }
+  const root = frets.findIndex((f) => f !== null), cy = (f) => y0 + (f - start + 0.5) * rowH;
+  if (shape.barre) {
+    const on = frets.map((f, i) => f === shape.barre ? i : -1).filter((i) => i >= 0), a = on[0], b = on[on.length - 1];
+    svg.append(svgEl("rect", { x: sx(a) - 5.5, y: cy(shape.barre) - 5.5, width: sx(b) - sx(a) + 11, height: 11, rx: 5.5, fill: NAVY }));
+  }
+  frets.forEach((f, i) => {
+    if (f === null) { const t = svgEl("text", { x: sx(i), y: y0 - 7, "font-size": 10, "font-weight": 700, "text-anchor": "middle", fill: NAVY, "fill-opacity": 0.6 }); t.textContent = "×"; svg.append(t); }
+    else if (f === 0) svg.append(svgEl("circle", { cx: sx(i), cy: y0 - 10, r: 3.6, fill: "none", stroke: i === root ? ORANGE : NAVY, "stroke-width": 1.8 }));
+    else if (f !== shape.barre || i === root) svg.append(svgEl("circle", { cx: sx(i), cy: cy(f), r: 5.5, fill: i === root ? ORANGE : NAVY }));
+  });
+  return svg;
+}
+function keyboard(keys, rootPc) {
+  const lo = Math.min(...keys) < 48 ? 36 : 48, hi = 71, ww = 11, wh = 48, isBlack = (m) => [1, 3, 6, 8, 10].includes(m % 12);
+  const whites = []; for (let m = lo; m <= hi; m++) if (!isBlack(m)) whites.push(m);
+  const W = whites.length * ww + 2, svg = svgEl("svg", { viewBox: "0 0 " + W + " " + (wh + 2), width: W, height: wh + 2, role: "img" });
+  svg.append(svgEl("title", {})); svg.firstChild.textContent = "Teclas do acorde no piano (a laranja é a fundamental)";
+  const on = new Set(keys), color = (m) => m % 12 === rootPc ? ORANGE : TEAL;
+  whites.forEach((m, i) => svg.append(svgEl("rect", { x: 1 + i * ww, y: 1, width: ww, height: wh, rx: 2, fill: on.has(m) ? color(m) : CREAM, stroke: NAVY, "stroke-width": 1 })));
+  whites.forEach((m, i) => { const b = m + 1; if (b <= hi && isBlack(b)) svg.append(svgEl("rect", { x: 1 + (i + 1) * ww - 3.5, y: 1, width: 7, height: wh * 0.6, rx: 1.5, fill: on.has(b) ? color(b) : NAVY, stroke: NAVY, "stroke-width": 1 })); });
+  return svg;
+}
+function chordCard(ch, tag) {     // nome do acorde + diagrama, conforme a aba (violão ou piano)
+  const sh = chordShift(), v = voicing(ch, sh), kind = diagramKind(), card = el(tag || "div", "dc");
+  card.append(el("div", "nm", tChord(ch.label, sh)));
+  if (!v) return card;
+  if (kind === "guitar") { card.append(guitarBox(v.guitar), el("div", "ft", v.guitar.text)); }
+  else {
+    const rootPc = (((ch.root + sh) % 12) + 12) % 12, keys = v.piano.slice(), m = /\/([A-G][#b]?)$/.exec(tChord(ch.label, sh));
+    if (m && PC[m[1]] !== rootPc) keys.unshift(36 + PC[m[1]]);      // baixo invertido (C/E): nota do baixo uma oitava abaixo
+    card.append(keyboard(keys, rootPc));
+  }
+  return card;
+}
+function updateDia(ch) {
+  const d = $("#dia"); if (!d) return; d.replaceChildren();
+  if (ch && ch.label !== "N" && ch.root != null) d.append(chordCard(ch));
+}
+function renderHowToPlay(inst, c) {
+  const seen = new Map(); inst.chords.forEach((ch) => { if (ch.root != null && ch.label !== "N") { const k = ch.root + ":" + ch.quality; if (!seen.has(k)) seen.set(k, ch); } });
+  if (!seen.size) return;
+  const kind = diagramKind(), head = el("div", "lh"); head.append(el("span", "lbl up", "Como tocar os acordes"));
+  if (tab === "mix") [["guitar", "Violão"], ["piano", "Piano"]].forEach(([k, name]) => {
+    const b = el("button", "pill xs up" + (diaMode === k ? " on" : ""), name); b.onclick = () => { diaMode = k; lastIdx = -2; render(); }; head.append(b);
+  });
+  c.append(head);
+  if (kind === "guitar") {
+    const row = el("div", "capo");
+    if (capo > 0) {
+      const b = el("button", "pill xs up on", "Capotraste na casa " + capo + " ✕"); b.title = "Voltar aos acordes sem capotraste"; b.onclick = () => { capo = 0; lastIdx = -2; render(); };
+      row.append(b, el("span", "hint", "Os acordes aparecem como as formas que você toca; o som continua no tom original."));
+    } else if (inst.capo && shift === 0) {
+      const b = el("button", "pill xs up", "Usar capotraste na casa " + inst.capo.fret); b.onclick = () => { capo = inst.capo.fret; lastIdx = -2; render(); };
+      row.append(el("span", "hint", "Dica: com capotraste na casa " + inst.capo.fret + " quase não há pestanas (" + inst.capo.shapes.slice(0, 8).join(" · ") + ")."), b);
+    }
+    if (row.childNodes.length) c.append(row);
+  }
+  const legend = el("div", "legend");
+  [...seen.values()].slice(0, 24).forEach((ch) => { const card = chordCard({ ...ch, label: ch.label.split("/")[0] }, "button"); card.title = "Ir para a primeira vez em que aparece (" + fmt(ch.start) + ")"; card.onclick = () => seek(ch.start); legend.append(card); });
+  c.append(legend);
+  if (kind === "guitar") c.append(el("p", "hint", "Posições sugeridas em afinação padrão (6ª corda à esquerda; ponto laranja = fundamental). A gravação pode usar outras."));
+}
+
+// ---- riffs --------------------------------------------------------------------------
 function riffRoll(r) {
   const W = 600, H = 128, px = 8, py = 10, total = Math.max(0.2, ...r.notes.map((n) => n.offset + n.duration));
   const lo0 = Math.min(...r.notes.map((n) => n.midi)), hi0 = Math.max(...r.notes.map((n) => n.midi));
@@ -448,6 +559,10 @@ function renderRiffs() {
   const bar = el("div", "now"); bar.append(makeTranspose()); c.append(bar);
   if (!result.riffs.length) { (result.riff_messages.length ? result.riff_messages : ["Nenhum riff encontrado."]).forEach((m) => c.append(el("div", "info", m))); return; }
   c.append(el("p", "hint", "Riffs são trechos curtos de notas, com o mesmo ritmo, que se repetem na música. Clique num horário para ouvir aquele trecho da gravação."));
+  if (hasAudio) {
+    const lp = el("button", "pill xs up" + (loopOn ? " on" : ""), "Repetir o trecho"); lp.title = "Com isto ligado, o trecho clicado fica repetindo (bom para treinar)";
+    lp.onclick = () => { loopOn = !loopOn; lp.classList.toggle("on", loopOn); if (!loopOn) loopFrom = null; }; c.append(lp);
+  }
   result.riffs.forEach((r) => {
     const card = el("div", "riff"), head = el("div", "rh");
     head.append(el("span", "tag fill", r.label), el("span", "tag", r.instrument_label),
@@ -478,7 +593,7 @@ function stopRiff() {
 }
 function playRiff(r, btn) {
   if (riffBtn === btn) { stopRiff(); return; }
-  stopRiff(); audio.pause(); stopAt = null;
+  stopRiff(); audio.pause(); clearExcerpt();
   actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume();
   const t0 = actx.currentTime + 0.06, master = actx.createGain(), filt = actx.createBiquadFilter();
   filt.type = "lowpass"; filt.frequency.value = r.instrument === "bass" ? 900 : r.instrument === "piano" ? 4000 : 2600; master.gain.value = 0.5;
@@ -494,18 +609,18 @@ function playRiff(r, btn) {
   riffBtn = btn; btn.textContent = "■ Parar";
   riffTimer = setTimeout(stopRiff, (r.duration + 0.5) * 1000);
 }
-function playExcerpt(a, b) { if (!hasAudio) return; stopRiff(); audio.currentTime = a; stopAt = b + 0.4; audio.play(); }
+function playExcerpt(a, b) { if (!hasAudio) return; stopRiff(); audio.currentTime = a; stopAt = b + 0.4; loopFrom = loopOn ? a : null; audio.play(); }
 
 // ---- player + onda -----------------------------------------------------------------
 const canvas = $("#wave");
 function setPlayIcon() { $("#pp").innerHTML = audio.paused ? ICON_PLAY : ICON_PAUSE; }
 $("#pp").onclick = () => { audio.paused ? audio.play() : audio.pause(); };
 audio.addEventListener("play", setPlayIcon); audio.addEventListener("pause", setPlayIcon);
-$("#back").onclick = () => { stopAt = null; audio.currentTime = Math.max(0, audio.currentTime - 5); };
-$("#fwd").onclick = () => { stopAt = null; audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5); };
+$("#back").onclick = () => { clearExcerpt(); audio.currentTime = Math.max(0, audio.currentTime - 5); };
+$("#fwd").onclick = () => { clearExcerpt(); audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5); };
 const SPEEDS = [0.5, 0.75, 1, 1.25]; $("#speed").onclick = () => { const i = (SPEEDS.indexOf(audio.playbackRate) + 1) % SPEEDS.length; audio.playbackRate = SPEEDS[i]; $("#speed").textContent = SPEEDS[i] + "×"; };
 $("#follow").classList.add("on"); $("#follow").onclick = () => { follow = !follow; $("#follow").classList.toggle("on", follow); };
-canvas.addEventListener("click", (e) => { stopAt = null; const r = canvas.getBoundingClientRect(), d = audio.duration || (result && result.track.duration) || 0; audio.currentTime = d * (e.clientX - r.left) / r.width; });
+canvas.addEventListener("click", (e) => { clearExcerpt(); const r = canvas.getBoundingClientRect(), d = audio.duration || (result && result.track.duration) || 0; audio.currentTime = d * (e.clientX - r.left) / r.width; });
 window.addEventListener("resize", () => result && drawWave());
 function drawWave() {
   if (!result) return;
@@ -520,9 +635,9 @@ function drawWave() {
     g.beginPath(); g.roundRect(i * step + 1, (h - bh) / 2, 3.5, bh, 2); g.fill();
   }
 }
-setInterval(() => { if (!result) return; if (stopAt !== null && audio.currentTime >= stopAt) { audio.pause(); stopAt = null; } $("#time").textContent = fmt(audio.currentTime || 0) + " / " + fmt(audio.duration || result.track.duration || 0); drawWave(); highlight(); }, 120);
+setInterval(() => { if (!result) return; if (stopAt !== null && (audio.currentTime >= stopAt || audio.ended)) { if (loopFrom !== null) { audio.currentTime = loopFrom; if (audio.paused) audio.play(); } else { audio.pause(); clearExcerpt(); } } $("#time").textContent = fmt(audio.currentTime || 0) + " / " + fmt(audio.duration || result.track.duration || 0); drawWave(); highlight(); }, 120);
 
-function seek(t) { if (!hasAudio) return; stopAt = null; audio.currentTime = t; audio.play(); }
+function seek(t) { if (!hasAudio) return; clearExcerpt(); audio.currentTime = t; audio.play(); }
 function findIndex(list, t) { let lo = 0, hi = list.length - 1, ans = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (list[m].start <= t) { ans = m; lo = m + 1; } else hi = m - 1; } return ans; }
 let lastIdx = -2, lastNote = -2;
 function highlight(force) {
@@ -551,6 +666,7 @@ function highlight(force) {
   cur.textContent = i >= 0 && inst.chords[i].label !== "N" ? tChord(inst.chords[i].label) : "—";
   const L = cur.textContent.length; cur.style.fontSize = L <= 2 ? "38px" : L === 3 ? "32px" : L === 4 ? "26px" : L === 5 ? "22px" : "18px";
   const nx = inst.chords[i + 1]; nxt.textContent = nx && nx.label !== "N" ? tChord(nx.label) : "—";
+  updateDia(i >= 0 ? inst.chords[i] : null);
   document.querySelectorAll(".chip").forEach((ch) => ch.classList.toggle("on", Number(ch.dataset.i) === i));
   const on = document.querySelector(".chip.on"); if (on && follow && !audio.paused) on.scrollIntoView({ block: "nearest" });
 }
@@ -570,7 +686,14 @@ function asText() {
     };
     if (x === "voice") noteRows();
     else {
-      for (let i = 0; i < inst.chords.length; i += 4) out.push(inst.chords.slice(i, i + 4).map((c) => fmt(c.start) + " " + tChord(c.label)).join("   "));
+      const sh = chordShift(x);
+      if (capoOn(x)) out.push("Capotraste na casa " + capo + " (acordes escritos como as formas tocadas)");
+      for (let i = 0; i < inst.chords.length; i += 4) out.push(inst.chords.slice(i, i + 4).map((c) => fmt(c.start) + " " + tChord(c.label, sh)).join("   "));
+      if (x === "mix" && VOIC) {
+        const seen = new Map(); inst.chords.forEach((c) => { if (c.root != null && c.label !== "N") seen.set(c.root + ":" + c.quality, c); });
+        const how = [...seen.values()].slice(0, 24).map((c) => { const v = voicing(c, sh); return v ? tChord(c.label.split("/")[0], sh) + " " + v.guitar.text : null; }).filter(Boolean);
+        if (how.length) out.push("", "Como tocar no violão (6ª→1ª corda): " + how.join(" · "));
+      }
       if (x === "bass" && inst.notes.length) { out.push("", "Linha de baixo:"); noteRows(); }
     }
   });
@@ -596,7 +719,7 @@ $("#dl").onclick = () => { const a = document.createElement("a"); a.href = URL.c
   if (!r.ok) return forgetJob();
   const j = await readJson(r); jobId = m[1];
   if (j.status === "done") show(j.result, j.has_audio);
-  else if (j.status === "error") forgetJob();
+  else if (j.status === "error" || j.status === "cancelled") forgetJob();
   else { $("#go").disabled = true; $("#progress").classList.remove("hidden"); setProgress(j.stage, j.progress, j.message); poll(); }
 })();
 </script>
