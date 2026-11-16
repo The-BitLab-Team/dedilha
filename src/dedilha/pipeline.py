@@ -12,8 +12,8 @@ import numpy as np
 from . import audio
 from .audio import ANALYSIS_SR
 from .bass import bass_range, bass_roots, clean_bass_line
-from .chords import ChordAnalysis, detect_chords, relabel
-from .models import AnalysisResult, ChordSegment, InstrumentResult, NoteEvent, Riff, TrackInfo
+from .chords import detect_chords, relabel
+from .models import AnalysisResult, ChordSegment, InstrumentResult, NoteEvent, Riff
 from .music import estimate_key
 from .riffs import find_riffs
 from .separation import DemucsOnnxSeparator, SeparationError, Separator
@@ -21,6 +21,7 @@ from .sources import ResolvedInput, resolve_source
 from .transcribe import Transcriber, Transcription
 from .util import ProgressFn, Window, noop_progress, timed
 from .vocals import extract_vocal_notes
+from .voicings import suggest_capo
 
 LABELS = {"mix": "Música (mix)", "guitar": "Violão / Guitarra", "piano": "Piano", "bass": "Baixo",
           "voice": "Voz"}
@@ -43,6 +44,7 @@ class AnalysisOptions:
     voice_from_mix: bool = False          # rastrear a voz direto da mix (ex.: gravação a cappella)
     auto_tune_correction: bool = True     # corrige gravações fora de A=440
     keep_stems_dir: Optional[Path] = None
+    display_title: Optional[str] = None   # nome a mostrar quando a entrada é um arquivo (ex.: upload na web)
 
 
 def _rms(y: np.ndarray) -> float:
@@ -75,6 +77,11 @@ def _beats(y: np.ndarray, sr: int) -> tuple[np.ndarray, Optional[float]]:
         return np.zeros(0), None
 
 
+def _capo(chords: list[ChordSegment]) -> Optional[dict]:
+    suggestion = suggest_capo(chords)
+    return suggestion.to_dict() if suggestion else None
+
+
 class Analyzer:
     def __init__(self, separator: Optional[Separator] = None, transcriber: Optional[Transcriber] = None):
         self._separator = separator
@@ -92,6 +99,10 @@ class Analyzer:
                                       cookies_from_browser=opt.cookies_from_browser,
                                       allow_other_urls=opt.allow_other_urls, progress=progress,
                                       lo=0.0, hi=0.2)
+        if opt.display_title and resolved.track.source_kind == "file":
+            # arquivo enviado pela interface: mostra o nome original, não o caminho temporário do servidor
+            resolved.track.title = Path(opt.display_title).stem or opt.display_title
+            resolved.track.source = opt.display_title
         progress("load", 0.2, "Lendo o áudio…")
         y_mix = audio.load_mono(resolved.wav_path, ANALYSIS_SR)
         result = self.analyze_signal(y_mix, resolved, opt, progress, wav_path=resolved.wav_path,
@@ -164,7 +175,8 @@ class Analyzer:
         if key:
             result.key, result.key_short = key.name(), key.short()
         relabel(a_mix.segments, flats)
-        result.instruments["mix"] = InstrumentResult("mix", LABELS["mix"], chords=a_mix.segments)
+        result.instruments["mix"] = InstrumentResult("mix", LABELS["mix"], chords=a_mix.segments,
+                                                     capo=_capo(a_mix.segments))
 
         # 5) violão/guitarra e piano (os riffs também precisam das notas desses stems) -----------
         riff_notes: dict[str, list[NoteEvent]] = {}
@@ -229,7 +241,7 @@ class Analyzer:
         except SeparationError as exc:
             result.warnings.append(
                 f"Não foi possível separar os instrumentos ({exc}). Mostrando só os acordes da "
-                "música (mix); violão/guitarra, piano e voz ficam indisponíveis.")
+                "música (mix); violão/guitarra, piano, baixo, voz e riffs ficam indisponíveis.")
         return None
 
     @staticmethod
@@ -263,7 +275,8 @@ class Analyzer:
             t = self._transcriber.transcribe(_norm(y), flats=flats)
             a = detect_chords(t.posteriorgram, t.frame_times, duration, beat_times=beats,
                               vocabulary=opt.vocabulary, flats=flats, slash=opt.slash_chords)
-        return InstrumentResult(inst, label, chords=a.segments, notes=t.notes)
+        return InstrumentResult(inst, label, chords=a.segments, notes=t.notes,
+                                capo=_capo(a.segments) if inst == "guitar" else None)
 
     @staticmethod
     def _bass(y_work: np.ndarray, stems: Optional[dict[str, np.ndarray]],

@@ -1,10 +1,11 @@
 # Dedilha
 
 Detecta os **acordes** (violão, guitarra, piano), a **linha de baixo** (fundamental de cada acorde e notas do baixo),
-os **riffs** (trechos curtos que se repetem, com notas, horários e tablatura)
+os **riffs** (trechos curtos que se repetem, com notas, horários e tablatura), mostra **como tocar cada acorde**
+(diagrama no braço do violão e no teclado do piano, com sugestão de capotraste)
 e, opcionalmente, as **notas cantadas** (G5, F3, A4…) de uma música. A entrada pode ser um link do **YouTube**, um link do **Spotify** ou um **arquivo de áudio**.
 
-> Estado: primeira versão funcional, em texto. Diagramas visuais dos instrumentos ficam para a próxima etapa.
+> Estado: primeira versão funcional, ainda não medida em música real.
 > **Leia a seção [Limitações](#limitações-honestas)** antes de confiar nos resultados.
 
 ## Como funciona
@@ -86,8 +87,17 @@ Ao criar uma tag `v*` (por exemplo `git tag v0.1.0 && git push --tags`), ele tam
 
 **Interface web**: cole um link ou arraste um arquivo, escolha os instrumentos, clique em analisar.
 Você ganha player com forma de onda, anel do acorde atual, transposição (−/+), abas por instrumento e
-botões para copiar o texto ou baixar o JSON. A aba **Riffs** mostra cada riff num cartão (notas, piano-roll,
-tablatura, botão "Ouvir riff" e os horários em que ele aparece: clique num horário para ouvir aquele trecho da gravação).
+botões para copiar o texto ou baixar o JSON. O endereço da página guarda a análise (`#…`): recarregar a página
+traz o resultado de volta enquanto o programa estiver aberto. Uma análise em andamento pode ser **cancelada**.
+
+**Como tocar os acordes**: ao lado do acorde atual aparece o diagrama dele, e logo abaixo um quadro com todos os
+acordes da música (clique num deles para ir à primeira vez em que aparece). Na aba da música dá para alternar entre
+violão e piano. Quando a música tem muitas pestanas, o app sugere um **capotraste**: com um clique os acordes
+passam a aparecer como as formas tocadas com ele. A transposição (−/+) também atualiza os diagramas.
+
+A aba **Riffs** mostra cada riff num cartão (notas, piano-roll,
+tablatura, botão "Ouvir riff" e os horários em que ele aparece: clique num horário para ouvir aquele trecho da
+gravação; com "Repetir o trecho" ligado ele fica repetindo, para treinar).
 
 **Linha de comando** (dentro do `.venv`):
 
@@ -99,7 +109,8 @@ dedilha analyze "https://open.spotify.com/track/..."
 dedilha analyze minha_musica.mp3 -i guitar,piano,bass,voice --notes
 dedilha analyze minha_musica.mp3 -i bass          # só o baixo
 dedilha analyze minha_musica.mp3 -i riffs         # só os riffs
-dedilha analyze musica.wav --vocabulary extended --slash --json > saida.json
+dedilha analyze musica.wav --vocabulary extended --slash --json saida.json
+dedilha analyze musica.wav --json - > saida.json   # só o JSON na saída padrão
 dedilha serve --port 8765
 ```
 
@@ -109,7 +120,7 @@ Opções úteis: `--no-separation` (só os acordes da mix, bem mais rápido), `-
 
 ### Entradas aceitas
 
-- Links `youtube.com`, `youtu.be`, `music.youtube.com`.
+- Links `youtube.com`, `youtu.be`, `music.youtube.com` (com ou sem o `https://` na frente). Transmissões ao vivo não são aceitas.
 - Links `open.spotify.com/track/...` (o áudio **não** é baixado do Spotify: o app lê título e artista e
   procura a gravação no YouTube; confira se o vídeo escolhido é o certo).
 - Arquivos: mp3, wav, flac, m4a, aac, ogg, opus, wma, aiff e vídeos comuns (mp4, mkv, webm…). Limite de 300 MB na interface.
@@ -122,6 +133,10 @@ trecho), a extensão (nota mais grave e mais aguda) e a linha de baixo nota a no
 Com `--notes`/voz: notas cantadas em notação científica (C4 = dó central, A4 = 440 Hz)
 com início e duração.
 
+**Como tocar os acordes**: cada acorde da música uma vez, com a posição no violão escrita da 6ª para a 1ª corda
+(`C  x32010`; `x` = corda não tocada) e as notas no piano (`C E G`), mais a dica de capotraste quando compensa
+(`com capotraste na casa 3, toque as formas G, C, D, Em`).
+
 **Riffs** (`-i riffs`, ligado por padrão): para cada riff, as notas na ordem (`E2 G2 A2 A#2 A2 G2`; acordes
 como `E2+B2`), instrumento (guitarra, baixo ou piano), duração e batidas aproximadas, quantas vezes se repete,
 **os horários de cada aparição** (com `(+5)` quando a repetição vem transposta 5 semitons acima) e uma sugestão
@@ -131,9 +146,11 @@ instrumentos (Demucs).
 
 ## Limitações honestas
 
-- **Download real do YouTube/Spotify e o Demucs com pesos reais não foram executados no ambiente de
-  desenvolvimento** (rede restrita). Esses caminhos foram testados com simulações. Rode `dedilha doctor`
-  e teste uma música sua primeiro.
+- **O download real do YouTube e a leitura real do Spotify nunca foram executados** (o ambiente de
+  desenvolvimento não alcança esses sites): esses caminhos só foram testados com respostas simuladas. Rode
+  `dedilha doctor` e teste uma música sua primeiro.
+- **O Demucs com os pesos reais só rodou no teste automático do GitHub**, num acorde sintético de 6 segundos
+  (prova que baixa e executa, não que separa bem). A qualidade da separação em música de verdade não foi medida.
 - **A precisão foi medida só em música sintética** (~99% dos acordes). Em gravações reais com reverb,
   distorção, bateria e vocais, será menor, e os parâmetros ainda precisam de ajuste com música real.
 - Os stems de **guitarra e piano do Demucs são experimentais** (o piano vaza mais). O **baixo** depende do stem
@@ -146,12 +163,16 @@ instrumentos (Demucs).
 - Vozes: o pYIN rastreia uma melodia por vez; coros, harmonias e vozes muito graves/agudas saem piores.
 - **Nome:** "Dedilha" foi escolhido por não ter achado produto de música, pacote (PyPI/npm) ou app com esse nome exato, mas isso **não é registro de marca**: antes de vender, consulte o INPI. O nome anterior de trabalho, "Chordify", é um produto comercial existente e não deve ser usado.
 - **Termos de uso:** baixar do YouTube pode violar seus termos. Use para estudo pessoal, com músicas que
-  você tem direito de usar. O servidor local só escuta em `127.0.0.1` e só aceita links do YouTube e do Spotify.
-
-- **O executável do Windows nunca foi executado pelo autor em Windows**: o instalador foi validado de ponta a ponta
-  em Linux e o workflow do GitHub faz o teste de fumaça no Windows. Se a primeira execução falhar, o log em
+  você tem direito de usar.
+- **O executável do Windows foi testado só pelo workflow do GitHub** (Windows limpo: instala tudo do zero, roda o
+  `doctor` e analisa um acorde sintético, com e sem separação). Nunca foi aberto por uma pessoa num Windows de
+  uso comum, com antivírus e SmartScreen. Se a primeira execução falhar, o log em
   `%LOCALAPPDATA%\Dedilha\logs\setup.log` mostra onde.
 
+- **Diagramas de acordes**: são posições **sugeridas** em afinação padrão (a forma aberta tradicional, ou a
+  pestana mais perto do começo do braço), não as que o músico usou na gravação. Acordes com baixo invertido (C/E)
+  mostram a forma do acorde sem o baixo. A dica de capotraste só considera "forma aberta" contra "pestana"; o
+  som continua no tom original, mas a posição das notas muda.
 - **Riffs**: só aparecem repetições **quase idênticas** (mesmas notas relativas e mesmo ritmo, com pequena folga de
   tempo). Se o músico varia o riff, ou se uma nota some na transcrição, aquela repetição não é reconhecida; um
   riff pode também ser encontrado só em parte. Dependem dos stems do Demucs (guitarra/baixo/piano) e a precisão foi
@@ -159,17 +180,33 @@ instrumentos (Demucs).
   trastes 0–17): a posição real que o músico usou pode ser outra. Sequências longas e muito simples podem render
   coincidências; confira de ouvido com o botão "Ouvir riff" e os horários.
 
+## Privacidade e segurança
+
+- A interface é um servidor **local**: por padrão só escuta em `127.0.0.1` (este computador). O áudio é
+  processado na sua máquina; a rede só é usada para baixar do YouTube, ler os dados da faixa no Spotify e
+  baixar o modelo de separação na primeira vez.
+- O campo de link só aceita **links** do YouTube e do Spotify. Arquivos entram pelo botão de envio: a interface
+  não lê caminhos de arquivos do computador.
+- O servidor recusa pedidos vindos de outros sites abertos no navegador (confere os cabeçalhos `Host` e `Origin`).
+- `dedilha serve --host 0.0.0.0` abre o programa para os outros aparelhos da rede local, sem senha. Use só em
+  redes em que você confia.
+- Arquivos temporários: depois de cada análise fica só um MP3 para o player (o WAV de entrada é apagado). Tudo é
+  removido ao fechar o programa com Ctrl+C, e sobras com mais de 3 horas são apagadas na próxima abertura. Ficam
+  em `~/.cache/dedilha/jobs` (ou `%LOCALAPPDATA%\Dedilha\jobs` no executável; `DEDILHA_JOBS_DIR` muda o local).
+
 ## Testes
 
 ```
 pip install -e ".[dev]"
-pip install --no-deps basic-pitch
+pip install --no-deps "basic-pitch>=0.4,<0.5"
+ruff check .        # verificação estática (erros comuns, imports sem uso)
 pytest              # ~1–2 min; usa música sintética com gabarito, sem rede
 ```
 
 Os testes cobrem teoria musical, reconhecimento de acordes, notas da voz, linha de baixo, riffs e tablatura, classificação de
-links/metadados do Spotify (com respostas simuladas), o pipeline completo (com separador falso), a API web e o
-instalador do executável (`launcher/`).
+links/metadados do Spotify (com respostas simuladas), o pipeline completo (com separador falso), a API web
+(incluindo as checagens de segurança, o cancelamento e a limpeza de arquivos temporários), as posições de todos os
+acordes no violão e no piano e o instalador do executável (`launcher/`).
 
 ## Estrutura
 
@@ -183,6 +220,7 @@ src/dedilha/
   chords.py       acordes: chroma → gabaritos → Viterbi
   vocals.py       notas cantadas (pYIN)
   bass.py         linha de baixo e fundamental por acorde
+  voicings.py     como tocar cada acorde (violão e piano) e sugestão de capotraste
   riffs.py        riffs: trechos curtos que se repetem (notas → eventos → repetições)
   tab.py          tablatura sugerida (violão/guitarra e baixo)
   pipeline.py     orquestra tudo
@@ -199,7 +237,7 @@ docs/PESQUISA.md  pesquisa de pacotes e decisões
 ## Próximos passos
 
 1. Medir e ajustar com 5–10 músicas reais.
-2. Diagramas de violão (braço) e piano (teclado) com os acordes.
+2. Diagramas: mais de uma posição por acorde, outras afinações e a forma certa para baixo invertido (C/E).
 3. Validar acordes com baixo invertido (`--slash`) e os riffs em música real (e afinar os limites do detector).
    Depois: riffs com pequenas variações (repetição aproximada) e outras afinações na tablatura.
 4. Voz mais precisa com CREPE/pesto (requer PyTorch/TensorFlow).

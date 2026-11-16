@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Iterable
 
 from .models import AnalysisResult, ChordSegment, InstrumentResult, NoteEvent
-from .music import fmt_time
+from .music import CHORD_TYPES, chord_label, fmt_time, pc_name
+from .voicings import guitar_shape, piano_keys
+
+MAX_CHORDS_IN_LEGEND = 24
 
 
 def chord_lines(chords: Iterable[ChordSegment], per_line: int = 4) -> list[str]:
@@ -65,8 +68,9 @@ def _header(r: AnalysisResult) -> list[str]:
 
 
 def _section(inst: InstrumentResult, *, show_notes: bool) -> list[str]:
-    title = {"mix": "ACORDES DA MÚSICA", "guitar": "VIOLÃO / GUITARRA", "piano": "PIANO",
-             "bass": "BAIXO — FUNDAMENTAL DE CADA ACORDE E LINHA DE BAIXO", "voice": "VOZ — NOTAS CANTADAS"}.get(inst.key, inst.label.upper())
+    titles = {"mix": "ACORDES DA MÚSICA", "guitar": "VIOLÃO / GUITARRA", "piano": "PIANO",
+              "bass": "BAIXO — FUNDAMENTAL DE CADA ACORDE E LINHA DE BAIXO", "voice": "VOZ — NOTAS CANTADAS"}
+    title = titles.get(inst.key, inst.label.upper())
     out = ["", f"== {title} " + "=" * max(3, 60 - len(title))]
     if not inst.available:
         out.append(f"  (indisponível: {inst.reason})")
@@ -109,11 +113,36 @@ def riff_lines(result: AnalysisResult) -> list[str]:
     return out
 
 
+def how_to_play_lines(result: AnalysisResult) -> list[str]:
+    """Cada acorde da música uma vez: posição no braço do violão e notas no piano."""
+    mix = result.instruments.get("mix")
+    chords = [c for c in (mix.chords if mix else []) if c.root is not None and c.quality in CHORD_TYPES]
+    if not chords:
+        return []
+    flats = any(len(c.label) > 1 and c.label[1] == "b" for c in chords)
+    seen: dict[tuple[int, str], None] = {}
+    for c in chords:
+        seen.setdefault((c.root % 12, c.quality), None)
+    out = ["", "== COMO TOCAR OS ACORDES " + "=" * 37,
+           "  (violão: casas da 6ª para a 1ª corda, x = não tocar; é uma sugestão de posição)"]
+    for root, quality in list(seen)[:MAX_CHORDS_IN_LEGEND]:
+        notes = " ".join(pc_name(k % 12, flats) for k in piano_keys(root, quality))
+        out.append(f"  {chord_label(root, quality, flats):<7} violão {guitar_shape(root, quality).text:<18} piano {notes}")
+    if len(seen) > MAX_CHORDS_IN_LEGEND:
+        out.append(f"  (+{len(seen) - MAX_CHORDS_IN_LEGEND} acordes)")
+    if mix and mix.capo:
+        shapes = ", ".join(mix.capo["shapes"][:12])
+        out += ["", f"  Dica para violão: com capotraste na casa {mix.capo['fret']}, toque as formas {shapes}",
+                    "  (na mesma ordem dos acordes acima; evita a maior parte das pestanas)."]
+    return out
+
+
 def render_text(result: AnalysisResult, *, show_notes: bool = False) -> str:
     lines = _header(result)
     for key in ("mix", "guitar", "piano", "bass", "voice"):
         if key in result.instruments:
             lines += _section(result.instruments[key], show_notes=show_notes)
+    lines += how_to_play_lines(result)
     if result.riffs_requested:
         lines += riff_lines(result)
     if result.warnings:

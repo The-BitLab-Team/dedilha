@@ -84,11 +84,13 @@ piores e plano de ajuste com gravações reais.
 
 O ambiente de desenvolvimento só alcançava o PyPI (YouTube, Spotify e HuggingFace bloqueados). Portanto:
 
-- Download real do YouTube e leitura real de links do Spotify: testados com respostas **simuladas**.
-- O `Dedilha.exe` e o instalador no **Windows**: validados em Linux (uv, Python, dependências e Deno reais);
-  no Windows só o workflow do GitHub os exercita.
-- Separação real com o Demucs: o pacote e a API foram inspecionados, mas o modelo não pôde ser baixado;
-  o fluxo foi testado com um separador falso que devolve os stems verdadeiros.
+- Download real do YouTube e leitura real de links do Spotify: testados só com respostas **simuladas**.
+- O `Dedilha.exe` e o instalador no **Windows**: exercitados pelo workflow do GitHub num Windows limpo
+  (12/11/2026: instalação do zero, `doctor` e análise de um acorde sintético passaram). Nunca foram abertos por
+  uma pessoa num Windows de uso comum (antivírus, SmartScreen, rede doméstica).
+- Separação real com o Demucs: no mesmo workflow o modelo foi baixado e separou um acorde sintético de 6 s.
+  Isso prova que o caminho funciona, não que a separação é boa: em música real a qualidade não foi medida.
+  Nos testes automáticos o fluxo usa um separador falso que devolve os stems verdadeiros.
 
 Primeiro passo no seu computador: `dedilha doctor`, depois um link do YouTube e um arquivo local.
 
@@ -128,6 +130,39 @@ sustentado e melodias aleatórias (8 sementes, 10 músicas × 3 min) → 0 riffs
 **Não validado em gravações reais**: ruído da transcrição, variações do músico e limites do filtro (tempo, repetições
 mínimas) precisam de ajuste com música real. Repetições aproximadas (uma nota diferente) ainda não são agrupadas.
 
+### Como tocar os acordes e capotraste
+
+`src/dedilha/voicings.py` gera, para as 12 fundamentais × 11 tipos de acorde (132 acordes):
+
+- **Violão/guitarra (afinação padrão).** Primeiro uma tabela de formas abertas tradicionais (C `x32010`,
+  G `320003`, Am `x02210`, B7 `x21202`…); para o resto, formas móveis: "forma de E" (fundamental na 6ª corda),
+  "forma de A" (5ª corda) e, só para sus2, "forma de D" (4ª corda). Escolhe-se a que fica mais perto do começo do
+  braço. Um teste confere os 132: só notas do acorde, nenhuma faltando (a quinta pode faltar em acordes de 4
+  notas), fundamental no baixo, abertura de no máximo 4 casas e pestana coerente.
+- **Piano.** Posição fundamental a partir de C3; com baixo invertido, a nota do baixo entra uma oitava abaixo.
+- **Capotraste.** Com o capotraste na casa N, cada acorde é tocado com a forma do acorde N semitons abaixo.
+  Mede-se a fração do tempo de acordes que exige pestana (ou forma sem cordas soltas) para N = 0…7; sugere-se o N
+  de menor custo (`fração + 0,03 × N`) só se o ganho passar de 0,3. Resultado em progressões comuns:
+  Bb–Eb–F–Gm → casa 3 (G–C–D–Em); B–E–F#–G#m → casa 4; C–G–Am–F e F#m–D–A–E → sem sugestão (um único acorde
+  com pestana não compensa). Esses dois limites (0,03 e 0,3) são escolha minha, sem estudo com violonistas.
+
+Limites: uma posição por acorde (não a que o músico usou), só afinação padrão, e o critério de dificuldade é
+simples (forma aberta contra pestana), sem considerar a troca entre acordes.
+
+A interface busca a tabela uma vez (`/api/voicings`) e desenha os diagramas em SVG; a transposição e o capotraste
+só trocam a chave consultada.
+
+### Cancelar uma análise
+
+`POST /api/jobs/{id}/cancel`. O cancelamento é cooperativo: uma análise na fila é cancelada na hora; uma em
+andamento para na próxima vez que avisa do progresso. A separação de instrumentos (Demucs) e o rastreio da voz
+(pYIN) não avisam durante a execução, então nesses trechos o programa só fica livre quando a etapa termina (pode
+levar minutos). Interromper de verdade exigiria rodar a análise em outro processo.
+
+Tempos medidos por etapa num trecho sintético de 77 s (CPU de 2 núcleos, sem o Demucs): voz 12 s (6× mais
+rápido que o tempo real), transcrição 1,9 s (40×), batidas 1,3 s, afinação 0,2 s. Depois da separação, a voz é a
+etapa mais lenta: uns 40 s numa música de 4 minutos.
+
 ## 7. Distribuição: um executável que baixa tudo
 
 Empacotar tudo num único `.exe` ("fat bundle": librosa, numba, onnxruntime, scipy, scikit-learn, yt-dlp…)
@@ -150,16 +185,41 @@ um acorde sintético antes de publicar o executável.
 Riscos conhecidos: executável sem assinatura (SmartScreen), falsos positivos de antivírus em PyInstaller
 onefile e dependência de internet na primeira execução.
 
+### Revisão de código (15/11/2026)
+
+Correções feitas depois de uma leitura completa do código:
+
+- **Segurança da interface local.** O campo de link aceitava caminhos de arquivo; como a API devolve o áudio
+  analisado, qualquer página capaz de falar com `127.0.0.1` (ou qualquer aparelho da rede, com `--host`) podia
+  pedir a leitura de arquivos de mídia do computador. Agora o campo só aceita links, e o servidor confere `Host`
+  (contra *DNS rebinding*) e `Origin` (contra pedidos disparados por outros sites).
+- **Disco.** Cada análise deixava para sempre o WAV de entrada (até ~150 MB para 15 min), o upload e o MP3 do
+  player em `~/.cache/dedilha/jobs`. Agora fica só o MP3 enquanto o programa está aberto; pastas com mais de 3 h
+  são apagadas na abertura seguinte.
+- **Baixo lento.** A remoção de notas-fantasma comparava todas as notas com todas (8 000 notas: 12 s). Com uma
+  janela de tempo: 0,04 s, com resultado idêntico ao anterior em 40 casos aleatórios.
+- **Entradas.** Links colados sem `https://` são aceitos; transmissões ao vivo e links curtos `spotify.link`
+  recebem uma mensagem clara; domínios que só terminam em "spotify.com" não passam mais por Spotify.
+- **Interface.** Arquivos enviados aparecem com o próprio nome (antes: "upload"); recarregar a página retoma a
+  análise; uma falha de rede passageira não descarta mais uma análise em andamento.
+- **Manutenção.** `basic-pitch` com faixa de versão (`>=0.4,<0.5`), versão do pacote num lugar só, `ruff` no
+  workflow, actions do GitHub atualizadas (as antigas rodavam em Node.js 20, já descontinuado).
+
+Não mexi nos parâmetros de detecção (acordes, riffs, voz): sem gravações reais para medir, qualquer ajuste
+seria chute. Dois comportamentos conhecidos ficam como estão: uma nota sozinha é rotulada como acorde (ex.: lá
+puro vira "Am") e ruído sem música ainda recebe um acorde.
+
 ## 8. Próximos passos sugeridos
 
 1. Medir com 5–10 músicas reais que você conhece bem e ajustar os parâmetros.
-2. Mostrar acordes em diagrama de violão e teclado de piano (os dados já saem em JSON).
+2. Diagramas: mais de uma posição por acorde, outras afinações, forma certa para baixo invertido.
 3. Acordes com baixo invertido (`--slash`, já implementado, ainda não validado em música real).
 4. Trocar o pYIN por CREPE/pesto se a voz ficar imprecisa.
 5. Detecção de compasso/downbeat para organizar a cifra em compassos.
 6. Distinguir violão de guitarra elétrica (hoje é um stem só).
 7. Assinar o executável com certificado de código.
 8. Riffs com variações (repetição aproximada, alinhamento tolerante a uma nota trocada) e validação em música real.
+9. Rodar a análise em outro processo, para o cancelamento valer na hora e a voz ganhar barra de progresso.
 
 ## 9. Aviso legal e de nome
 

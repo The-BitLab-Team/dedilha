@@ -204,7 +204,7 @@ def chord_accuracy(pred_segments, song: Song, *, hop: float = 0.1, guard: float 
         return "N"
 
     ok = tot = 0
-    for s, e, r, q in song.chords:
+    for s, e, _root, _quality in song.chords:
         t = s + guard
         while t < e - 0.1:
             tot += 1

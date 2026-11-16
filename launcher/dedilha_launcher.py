@@ -33,6 +33,9 @@ from typing import Optional, Sequence
 
 APP_NAME = "Dedilha"
 PYTHON_SPEC = "3.12"
+# Instalado com --no-deps (a dependência TensorFlow dele quebra no Python 3.12+), então as travas do
+# constraints.txt não o alcançam: a faixa de versão fica aqui. Mantenha igual em install.py e no workflow.
+BASIC_PITCH_SPEC = "basic-pitch>=0.4,<0.5"
 STATE_SCHEMA = 1
 UV_BASE = "https://github.com/astral-sh/uv/releases/latest/download/"
 DENO_BASE = "https://github.com/denoland/deno/releases/latest/download/"
@@ -278,6 +281,7 @@ class Installer:
             "UV_PYTHON_PREFERENCE": "only-managed",      # nunca usa o Python do sistema
             "UV_LINK_MODE": "copy",
             "HF_HOME": str(self.home / "huggingface"),
+            "DEDILHA_JOBS_DIR": str(self.home / "jobs"),    # temporários das análises (saem no --uninstall)
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
         })
@@ -328,7 +332,7 @@ class Installer:
         if constraints.exists():
             cmd += ["-c", constraints]
         self.run(cmd + [self.wheel], "instalar o Dedilha e as dependências")
-        self.run([self.uv, "pip", "install", "--python", self.python, "--no-deps", "basic-pitch"],
+        self.run([self.uv, "pip", "install", "--python", self.python, "--no-deps", BASIC_PITCH_SPEC],
                  "instalar o basic-pitch (transcrição de notas)")
 
     def step_deno(self) -> None:

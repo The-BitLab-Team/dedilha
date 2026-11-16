@@ -194,3 +194,18 @@ def test_uninstall(tmp_path):
     (home / "venv").mkdir(parents=True)
     assert L.uninstall(home, assume_yes=True) == 0 and not home.exists()
     assert L.uninstall(home, assume_yes=True) == 0          # já removido
+
+
+def test_env_points_job_files_into_the_app_folder(tmp_path):
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    inst = L.Installer(tmp_path / "home", payload, system="Windows", machine="AMD64")
+    assert inst.env()["DEDILHA_JOBS_DIR"] == str(tmp_path / "home" / "jobs")     # sai junto no --uninstall
+
+
+def test_basic_pitch_version_range_is_the_same_everywhere():
+    root = Path(__file__).resolve().parent.parent
+    spec = L.BASIC_PITCH_SPEC
+    assert spec.startswith("basic-pitch>=")
+    assert f'BASIC_PITCH_SPEC = "{spec}"' in (root / "install.py").read_text(encoding="utf-8")
+    assert f'"{spec}"' in (root / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")

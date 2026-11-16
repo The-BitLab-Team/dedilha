@@ -63,7 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="simple=maiores/menores; standard=+7, maj7, m7; extended=+sus, dim, aug, 5...")
     a.add_argument("--slash", action="store_true", help="mostra acordes com baixo (ex.: C/E)")
     a.add_argument("--notes", action="store_true", help="lista também as notas de cada instrumento")
-    a.add_argument("--json", metavar="ARQUIVO", help="salva o resultado completo em JSON")
+    a.add_argument("--json", metavar="ARQUIVO",
+                   help="salva o resultado completo em JSON (use - para imprimir o JSON na saída padrão)")
     a.add_argument("--max-minutes", type=float, default=15.0, help="duração máxima aceita (padrão 15)")
     a.add_argument("--cookies-from-browser", metavar="NAVEGADOR",
                    help="chrome, firefox, edge... (se o YouTube pedir login)")
@@ -73,7 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="aceita outros sites suportados pelo yt-dlp (SoundCloud, Bandcamp...)")
 
     s = sub.add_parser("serve", help="abre a interface web local")
-    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--host", default="127.0.0.1",
+                   help="endereço de escuta (padrão 127.0.0.1: só este computador; 0.0.0.0 abre para a rede local)")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--no-browser", action="store_true", help="não abre o navegador sozinho")
 
@@ -108,14 +110,20 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     except (InputError, DependencyError) as exc:
         print(f"Erro: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("\nAnálise interrompida.", file=sys.stderr)
+        return 130
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
+    as_json = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+    if args.json == "-":                 # só o JSON na saída padrão (para redirecionar: > saida.json)
+        print(as_json)
+        return 0
     print()
     print(render_text(result, show_notes=args.notes))
     if args.json:
-        Path(args.json).write_text(json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
-                                   encoding="utf-8")
+        Path(args.json).write_text(as_json, encoding="utf-8")
         print(f"JSON salvo em {args.json}", file=sys.stderr)
     return 0
 
@@ -184,8 +192,9 @@ def _free_port(host: str, start: int, tries: int = 20) -> int:
     """Primeira porta livre a partir de `start` (quem abre duas vezes não leva erro de porta ocupada)."""
     import socket
 
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
     for port in range(start, start + tries):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
             try:
                 sock.bind((host, port))
                 return port
@@ -200,16 +209,25 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     import uvicorn
 
-    from .web.app import create_app
+    from .web.app import LOOPBACK_HOSTS, create_app
 
     port = _free_port(args.host, args.port)
     if port != args.port:
         print(f"A porta {args.port} está ocupada (talvez o Dedilha já esteja aberto); usando a {port}.")
-    url = f"http://{args.host}:{port}"
+    local_only = args.host.lower() in LOOPBACK_HOSTS
+    # "0.0.0.0"/"::" significam "todas as interfaces": no navegador deste computador o endereço é o local
+    browse_host = "127.0.0.1" if args.host in ("0.0.0.0", "::", "") else args.host
+    url = f"http://[{browse_host}]:{port}" if ":" in browse_host else f"http://{browse_host}:{port}"
     if not args.no_browser:
-        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+        timer = threading.Timer(1.5, lambda: webbrowser.open(url))
+        timer.daemon = True
+        timer.start()
     print(f"Dedilha rodando em {url}  (Ctrl+C para parar)")
-    uvicorn.run(create_app(), host=args.host, port=port, log_level="warning")
+    if not local_only:
+        print("Aviso: o programa ficou acessível a outros aparelhos da sua rede (--host). "
+              "Use só em redes em que você confia.")
+    app = create_app(allowed_hosts=LOOPBACK_HOSTS if local_only else None)
+    uvicorn.run(app, host=args.host, port=port, log_level="warning")
     return 0
 
 

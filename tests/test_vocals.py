@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from synth import make_song, voice_note
+from synth import voice_note
 
 from dedilha.music import midi_to_name
 from dedilha.vocals import extract_vocal_notes, segment_notes, vocal_range

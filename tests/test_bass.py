@@ -76,3 +76,35 @@ def test_bass_line_from_synthetic_bass_stem(song_ctx, transcriber):
     assert hits / len(truth) >= 0.95
     assert len(line) <= 1.15 * len(truth)                      # poucas notas sobrando
     assert {pc_name(n.midi % 12) for n in line} <= {"C", "G", "A", "F"}
+
+
+def test_long_note_still_hides_its_ghost_much_later():
+    """A busca por fantasmas olha só as notas próximas no tempo; uma nota longa tem de continuar valendo."""
+    notes = [note(40, 0.0, 30.0, 0.9)]
+    notes += [note(47, 1.0 + i, 1.2 + i, 0.6) for i in range(20)]        # notas curtas no meio
+    notes += [note(52, 25.0, 26.0, 0.4)]                                  # harmônico da nota longa, 25 s depois
+    line = clean_bass_line(notes)
+    assert 52 not in [n.midi for n in line]
+
+
+def test_input_order_does_not_matter():
+    rng = np.random.default_rng(3)
+    notes = [note(int(rng.choice([28, 33, 40, 45, 52, 57])), float(s), float(s + rng.choice([0.12, 0.4, 1.5])),
+                  float(rng.uniform(0.2, 1))) for s in rng.uniform(0, 60, 300)]
+    ordered = sorted(notes, key=lambda n: (n.start, n.midi))
+    shuffled = list(notes)
+    rng.shuffle(shuffled)
+    as_tuples = lambda line: [(n.start, n.end, n.midi) for n in line]      # noqa: E731
+    assert as_tuples(clean_bass_line(ordered)) == as_tuples(clean_bass_line(shuffled))
+
+
+def test_long_song_is_fast():
+    import time
+
+    rng = np.random.default_rng(1)
+    notes = [note(int(rng.integers(28, 55)), float(s), float(s + rng.uniform(0.1, 0.6)), float(rng.uniform(0.3, 1)))
+             for s in np.sort(rng.uniform(0, 900, 8000))]
+    t0 = time.perf_counter()
+    line = clean_bass_line(notes)
+    assert time.perf_counter() - t0 < 2.0            # era quadrático: ~12 s para 8000 notas
+    assert len(line) > 500

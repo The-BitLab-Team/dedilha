@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dedilha"
-version = "0.1.0"
+dynamic = ["version"]         # lida de src/dedilha/__init__.py (um lugar só)
 description = "Detecta acordes e notas musicais (violão, guitarra, piano, baixo e voz) e riffs repetidos a partir de links do YouTube/Spotify ou arquivos de áudio."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,10 +31,13 @@ dependencies = [
 # o basic-pitch com --no-deps (ele já traz o modelo ONNX dentro do pacote).
 
 [project.optional-dependencies]
-dev = ["pytest", "httpx"]
+dev = ["pytest", "httpx", "ruff"]
 
 [project.scripts]
 dedilha = "dedilha.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "dedilha.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -46,3 +49,14 @@ dedilha = ["web/static/*"]
 testpaths = ["tests"]
 addopts = "-q"
 markers = ["slow: testes que rodam o modelo de transcrição (alguns segundos)"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+    "B905",   # zip() sem strict=: os tamanhos são iguais por construção
+    "B008",   # File()/Form() em argumentos padrão é o jeito do FastAPI
+]
