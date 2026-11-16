@@ -130,6 +130,39 @@ sustentado e melodias aleatórias (8 sementes, 10 músicas × 3 min) → 0 riffs
 **Não validado em gravações reais**: ruído da transcrição, variações do músico e limites do filtro (tempo, repetições
 mínimas) precisam de ajuste com música real. Repetições aproximadas (uma nota diferente) ainda não são agrupadas.
 
+### Como tocar os acordes e capotraste
+
+`src/dedilha/voicings.py` gera, para as 12 fundamentais × 11 tipos de acorde (132 acordes):
+
+- **Violão/guitarra (afinação padrão).** Primeiro uma tabela de formas abertas tradicionais (C `x32010`,
+  G `320003`, Am `x02210`, B7 `x21202`…); para o resto, formas móveis: "forma de E" (fundamental na 6ª corda),
+  "forma de A" (5ª corda) e, só para sus2, "forma de D" (4ª corda). Escolhe-se a que fica mais perto do começo do
+  braço. Um teste confere os 132: só notas do acorde, nenhuma faltando (a quinta pode faltar em acordes de 4
+  notas), fundamental no baixo, abertura de no máximo 4 casas e pestana coerente.
+- **Piano.** Posição fundamental a partir de C3; com baixo invertido, a nota do baixo entra uma oitava abaixo.
+- **Capotraste.** Com o capotraste na casa N, cada acorde é tocado com a forma do acorde N semitons abaixo.
+  Mede-se a fração do tempo de acordes que exige pestana (ou forma sem cordas soltas) para N = 0…7; sugere-se o N
+  de menor custo (`fração + 0,03 × N`) só se o ganho passar de 0,3. Resultado em progressões comuns:
+  Bb–Eb–F–Gm → casa 3 (G–C–D–Em); B–E–F#–G#m → casa 4; C–G–Am–F e F#m–D–A–E → sem sugestão (um único acorde
+  com pestana não compensa). Esses dois limites (0,03 e 0,3) são escolha minha, sem estudo com violonistas.
+
+Limites: uma posição por acorde (não a que o músico usou), só afinação padrão, e o critério de dificuldade é
+simples (forma aberta contra pestana), sem considerar a troca entre acordes.
+
+A interface busca a tabela uma vez (`/api/voicings`) e desenha os diagramas em SVG; a transposição e o capotraste
+só trocam a chave consultada.
+
+### Cancelar uma análise
+
+`POST /api/jobs/{id}/cancel`. O cancelamento é cooperativo: uma análise na fila é cancelada na hora; uma em
+andamento para na próxima vez que avisa do progresso. A separação de instrumentos (Demucs) e o rastreio da voz
+(pYIN) não avisam durante a execução, então nesses trechos o programa só fica livre quando a etapa termina (pode
+levar minutos). Interromper de verdade exigiria rodar a análise em outro processo.
+
+Tempos medidos por etapa num trecho sintético de 77 s (CPU de 2 núcleos, sem o Demucs): voz 12 s (6× mais
+rápido que o tempo real), transcrição 1,9 s (40×), batidas 1,3 s, afinação 0,2 s. Depois da separação, a voz é a
+etapa mais lenta: uns 40 s numa música de 4 minutos.
+
 ## 7. Distribuição: um executável que baixa tudo
 
 Empacotar tudo num único `.exe` ("fat bundle": librosa, numba, onnxruntime, scipy, scikit-learn, yt-dlp…)
@@ -179,13 +212,14 @@ puro vira "Am") e ruído sem música ainda recebe um acorde.
 ## 8. Próximos passos sugeridos
 
 1. Medir com 5–10 músicas reais que você conhece bem e ajustar os parâmetros.
-2. Mostrar acordes em diagrama de violão e teclado de piano (os dados já saem em JSON).
+2. Diagramas: mais de uma posição por acorde, outras afinações, forma certa para baixo invertido.
 3. Acordes com baixo invertido (`--slash`, já implementado, ainda não validado em música real).
 4. Trocar o pYIN por CREPE/pesto se a voz ficar imprecisa.
 5. Detecção de compasso/downbeat para organizar a cifra em compassos.
 6. Distinguir violão de guitarra elétrica (hoje é um stem só).
 7. Assinar o executável com certificado de código.
 8. Riffs com variações (repetição aproximada, alinhamento tolerante a uma nota trocada) e validação em música real.
+9. Rodar a análise em outro processo, para o cancelamento valer na hora e a voz ganhar barra de progresso.
 
 ## 9. Aviso legal e de nome
 
